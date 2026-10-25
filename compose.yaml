@@ -236,8 +236,12 @@ services:
       DOT_APPROVAL_MODE: ${DOT_APPROVAL_MODE:-passkey}
       OPENAI_TUNNEL_ID: ${OPENAI_TUNNEL_ID:-}
       OPENAI_TUNNEL_ENABLED: ${OPENAI_TUNNEL_ENABLED:-0}
+      # Owner-configured outbound webhooks (docs/webhooks.md); disabled without targets.
+      KAKAO_WEBHOOK_TARGETS: ${KAKAO_WEBHOOK_TARGETS:-}
+      KAKAO_WEBHOOK_TARGETS_FILE: /run/webhooks/targets.json
+      DOT_WEBHOOK_DB: /data/webhooks.db
     secrets: [read_token, send_token, mcp_link_key, mcp_storage_key, mcp_passkey_token]
-    volumes: [dot-state:/data]
+    volumes: [dot-state:/data, ./secrets/webhooks:/run/webhooks:ro]
     networks: [public-read-net, public-assertion-net, public-ingress-net, dot-net]
     depends_on:
       api:

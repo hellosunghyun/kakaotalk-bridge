@@ -20,6 +20,7 @@ from dot_plugin.pages import browser_page, error_page, page
 # Pages a person opens in a browser; protocol endpoints keep JSON errors.
 BROWSER_ROUTES = {"/authorize", "/authorize/passkey/consent"}
 from dot_plugin.storage import State
+from dot_plugin.webhooks import Forwarder
 from server.app import BodyLimit
 from server.outgoing import SendMessage, SendStatus
 from server.query_models import ContextPage, ConversationPage, MessagePage
@@ -281,6 +282,7 @@ def create_app(
     worker=True,
     passkeys=None,
     auth=None,
+    webhooks=None,
 ):
     config = config or Config.from_env()
     state = state or State(config.database, config.storage_key)
@@ -295,14 +297,28 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
-        thread = None
+        thread = forwarder_thread = None
+        forwarder = webhooks
         if worker:
             thread = threading.Thread(target=events.run, name="dot-events", daemon=True)
             thread.start()
+            # Owner-configured outbound webhooks; disabled unless targets are configured.
+            if forwarder is None:
+                forwarder = Forwarder.from_env(collector)
+            if forwarder is not None:
+                forwarder_thread = threading.Thread(
+                    target=forwarder.run, name="dot-webhooks", daemon=True
+                )
+                forwarder_thread.start()
+        app.state.webhooks = forwarder
         yield
         events.stop.set()
+        if forwarder is not None:
+            forwarder.stop.set()
         if thread:
             thread.join(timeout=12)
+        if forwarder_thread:
+            forwarder_thread.join(timeout=12)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(BodyLimit, maximum=32768)

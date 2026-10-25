@@ -2,6 +2,8 @@
 
 [ChatGPT 연결](dot-plugin.md) · [API](api.md)
 
+본문을 포함해 원하는 서버로 바로 보내려면 [웹훅 전달](webhooks.md)을 사용하세요.
+
 `message.created`는 별도로 구독하는 선택 기능입니다. 서버 시작이나 플러그인 연결만으로 자동 구독되지 않습니다. 이벤트 없이도 메시지를 조회하고 검색할 수 있습니다.
 
 <a id="choose-conversations-in-admin"></a>
