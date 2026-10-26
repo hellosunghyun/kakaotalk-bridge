@@ -192,6 +192,8 @@ def test_payload_and_standard_webhooks_signature(tmp_path):
         "is_mine": False,
         "body": "@김성현 이거 봐줘",
         "message_type": "1",
+        "attachment_type": "text",
+        "has_attachment": False,
         "truncated": False,
         "mentions": {"keywords": ["@김성현"], "matched": True},
     }
