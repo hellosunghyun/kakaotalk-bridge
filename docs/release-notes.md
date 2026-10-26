@@ -1,33 +1,34 @@
-# 메시지 전송 준비 확인
+# 메시지·미디어 전송과 GitHub 릴리스
 
-카카오톡이 아직 알림을 한 번도 띄우지 않은 태블릿에서 AI의 메시지 전송이 원인 표시 없이 실패하던 문제를 고쳤습니다. 0.3.1에서 바로 업데이트할 수 있습니다.
+이 포크의 첫 GitHub Actions 릴리스입니다. AI가 기존 대화방으로 사진·동영상·파일을 보내고 받은 첨부를 읽을 수 있게 했고, 이미지를 amd64·arm64 러너에서 직접 만들어 GitHub Releases와 GHCR에 게시합니다.
 
 ## 주요 변경
 
-- **첫 알림 전 전송 거절:** 카카오톡은 알림 답장에 필요한 값을 첫 메시지 알림 때 저장합니다. 그 전에는 전송 요청이 접수된 뒤 `device_rejected`로 실패했습니다. 이제 요청을 바로 `sending_unavailable_until_kakaotalk_notification`(423)으로 거절하고 관리 화면 현황에 **메시지 전송 준비 필요**를 표시합니다. 태블릿에서 대화방 밖의 화면을 띄운 채 다른 사람의 메시지를 한 번 받으면 10여 초 안에 보낼 수 있습니다. 수집기는 이 값이 있는지만 확인하고 값 자체는 기기 밖으로 가져오지 않습니다.
-- **터널 전송 권한 버튼:** 관리 화면 **AI 연결**의 **메시지 전송 허용**은 터널을 허용한 뒤 AI 요청이 한 번 성공해야 켜집니다. 이미 허용한 전송 권한은 그대로 유지됩니다.
-- **대화 이벤트 안내:** 관리 화면의 **대화 이벤트**에 새 카카오톡 메시지를 AI에 바로 알리는 기능이라는 설명과 준비 단계를 추가했습니다.
+- **미디어 전송:** `send_media`로 사진·동영상·음성·파일을 보냅니다. 카카오톡의 공유 화면을 그대로 사용합니다. 파일은 `application/octet-stream`으로 공유해 선택 창 없이 대화방으로 갑니다.
+- **인용·이모티콘·위치 (선택):** `KAKAO_UI_ACTIONS=on`일 때만 동작하는 UI 자동화입니다. 기본값은 꺼짐입니다.
+- **첨부 읽기:** `get_message_attachment`, `get_message_image`, `get_message_file`로 받은 사진·파일을 필요할 때 읽습니다. 서버에 바이트를 저장하지 않습니다.
+- **웹훅 전달·즉시 응답:** 새 메시지를 정적으로 설정한 웹훅으로 전달하고, 설정한 방에서 키워드가 나오면 일반 전송 경로로 확인 메시지를 보낼 수 있습니다. [웹훅 안내](https://github.com/hellosunghyun/kakaotalk-bridge/blob/main/docs/webhooks.md)
+- **보존 기간 무제한:** `RETENTION_DAYS=0`이면 메시지를 지우지 않습니다.
+- **릴리스 이미지 위치 변경:** `ghcr.io/hellosunghyun/kakaotalk-bridge/{server,device,gateway}`(linux/amd64·linux/arm64). 버전 태그와 `latest`가 함께 붙습니다.
+- **에이전트용 설치 안내:** 레포 링크만 받은 AI 코딩 에이전트가 따라 할 수 있는 [AGENTS.md](https://github.com/hellosunghyun/kakaotalk-bridge/blob/main/AGENTS.md)와 읽기 전용 점검 스크립트 `scripts/preflight.sh`를 추가했습니다.
 
-## 업데이트 방법
-
-0.3.1을 쓰고 있다면 `kakaotalk-bridge upgrade`를 실행하거나 설치 명령을 다시 실행하세요. 저장된 메시지·설정·카카오톡 로그인은 그대로 유지됩니다.
+## 설치·업데이트
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
 
-0.3.0 이하를 쓰고 있다면 0.3.1과 마찬가지로 삭제한 뒤 새로 설치해야 합니다. [삭제 안내](https://github.com/rokrokss/kakaotalk-bridge/blob/main/docs/operations.md#uninstall)
+화면 없는 서버는 `| bash -s -- --no-browser`를 쓰세요. 원래 rokrokss/kakaotalk-bridge 릴리스로 설치한 경우 이미지 저장소가 달라지므로 [삭제 안내](https://github.com/hellosunghyun/kakaotalk-bridge/blob/main/docs/operations.md#uninstall)대로 지운 뒤 새로 설치하는 것을 권장합니다.
 
-## 확인한 범위
+## 릴리스 파일
 
-자동 테스트와 함께, 카카오톡 계정이 없는 Apple Silicon Mac의 테스트 VM에서 다음을 확인했습니다.
+| 파일 | 내용 |
+| --- | --- |
+| `bridge-install.tar.gz` | 설치 파일(소스와 `release.json`) |
+| `release.json` | 서버·기기·게이트웨이 이미지 다이제스트 |
+| `install.sh`, `install.ps1` | 설치 스크립트 |
+| `kakaotalk-bridge-keyboard-<버전>.apk` | 릴리스 키로 서명한 Bridge 입력기 APK (이미지에도 포함) |
+| `iris-collector-unsigned-<버전>.apk` | Iris 수집기 APK. 기기 안에서 설치할 때 서명합니다 (이미지에도 포함) |
+| `SHA256SUMS` | 위 파일들의 체크섬 |
 
-- 0.3.1 릴리스를 그때의 설치 명령으로 설치한 뒤, 설치 명령을 다시 실행해 이 버전의 시험판(v0.3.2-rc.1)으로 업데이트했습니다. 인증 키와 볼륨은 그대로였고 설정 파일은 이미지 버전만 바뀌었습니다. 상태 점검이 모두 정상이었고 서비스 로그에 오류가 없었으며, 다시 실행하면 업데이트하지 않았습니다.
-- 실제 Android에서 전송 준비 확인이 설정 파일이 없거나 값이 비었을 때 `false`, 합성 값이 있을 때 `true`, ADB에 root 권한이 없을 때 확인 불가(`null`)로 보고했습니다.
-- 전송 준비 안내, 터널 전송 권한 버튼, 대화 이벤트 안내는 합성 데이터로 띄운 관리 화면에서 확인했습니다.
-
-실제 카카오톡 계정에서는 첫 알림 전에는 전송이 실패하고 첫 알림 뒤에는 같은 1:1 대화방으로 전송되는 것까지 확인했습니다. 이 버전의 거절 응답, 그룹·오픈채팅과 최근 알림이 없는 방으로의 전송, `kakaotalk-bridge upgrade` 명령으로의 업데이트, Linux 서버와 Intel Mac·WSL에서의 업데이트는 확인하지 않았습니다.
-
-새로 설치하는 방법과 실행 조건은 [설치 안내](https://github.com/rokrokss/kakaotalk-bridge/blob/main/docs/quickstart.md)를 참고하세요.
-
-`SHA256SUMS`로 수동 다운로드를 검사할 수 있으며, GitHub CLI의 `gh attestation verify <파일> --repo rokrokss/kakaotalk-bridge`로 출처 증명을 확인할 수 있습니다.
+`gh attestation verify <파일> --repo hellosunghyun/kakaotalk-bridge`로 출처 증명을 확인할 수 있습니다.

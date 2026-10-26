@@ -69,7 +69,7 @@ kakaotalk-bridge --local setup-agent serve   # Without systemd: run as root unde
 
 ```bash
 # Same command as install
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 
 # Or (add --version <tag> to pick one)
 kakaotalk-bridge upgrade
@@ -94,15 +94,15 @@ aarch64 서버에서 `docker compose build iris-collector`는 Android SDK가 amd
 
 | 이미지 | 서비스 |
 | --- | --- |
-| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/device` | `iris-collector`, `admin`, `device-agent` |
-| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/server` | `api`, `dot-plugin`, `mcp` (`dot-control`, `dot-tunnel`도 같은 이미지) |
-| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway` | `gateway`, `admin-local`, `dot-ingress` |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge/device` | `iris-collector`, `admin`, `device-agent` |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge/server` | `api`, `dot-plugin`, `mcp` (`dot-control`, `dot-tunnel`도 같은 이미지) |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge/gateway` | `gateway`, `admin-local`, `dot-ingress` |
 
-태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`)입니다. 기기 이미지는 수집기 빌드 `iris-ee1dc978-collector-v8` 태그도 달립니다. `main`에 푸시하거나 `feat/*` 브랜치, 태그, Actions의 수동 실행에서 올라갑니다. PR은 빌드만 하고 푸시하지 않습니다. 이미지 잡은 `ubuntu-24.04-arm`을 씁니다. 그 라벨의 러너가 없으면 잡이 시작되지 않으므로 GitHub 호스티드 ARM 러너를 사용할 수 있어야 합니다.
+태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`)입니다. 기기 이미지는 수집기 빌드 `iris-ee1dc978-collector-v8` 태그도 달립니다. `main`·`feat/*` 브랜치 푸시와 Actions 수동 실행에서 arm64로 올라갑니다. `v*` 태그는 [릴리스 워크플로](../.github/workflows/release.yml)가 amd64·arm64 멀티 아키텍처 이미지(`:<버전>`, `:latest`)로 올리고 GitHub Release를 만듭니다. PR은 빌드만 하고 푸시하지 않습니다. 이미지 잡은 `ubuntu-24.04-arm`을 씁니다. 그 라벨의 러너가 없으면 잡이 시작되지 않으므로 GitHub 호스티드 ARM 러너를 사용할 수 있어야 합니다.
 
 ### 서버에서 한 번
 
-`read:packages`가 있는 GitHub 토큰으로 로그인합니다. 비밀번호 자리에 토큰을 넣고, 토큰을 셸 기록에 남기지 마세요.
+패키지가 Public이면 로그인하지 않아도 됩니다. Private이면 `read:packages`가 있는 GitHub 토큰으로 로그인합니다. 비밀번호 자리에 토큰을 넣고, 토큰을 셸 기록에 남기지 마세요.
 
 ```bash
 docker login ghcr.io
@@ -113,9 +113,9 @@ docker login ghcr.io
 설치 폴더 `.env`에 세 이미지를 같은 태그로 적습니다. 비워 두면 지금까지와 같이 `kakaotalk-bridge/server:local`, `kakaotalk-bridge/device:local`, `kakaotalk-bridge/gateway:local`을 빌드합니다.
 
 ```bash
-DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/device:<tag>
-SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/server:<tag>
-GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway:<tag>
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/gateway:<tag>
 ```
 
 `SERVER_IMAGE`가 있으면 `api`, `dot-plugin`, `mcp`와 dot 계열 서비스가 그 이미지를 씁니다. 예전에 `DOT_IMAGE`나 `COLLECTOR_IMAGE`가 있어도 `SERVER_IMAGE`가 우선합니다. `SERVER_IMAGE`가 없으면 릴리스 설치가 쓰던 `COLLECTOR_IMAGE`와 `DOT_IMAGE`가 그대로 동작합니다.
@@ -174,7 +174,7 @@ kakaotalk-bridge start   # Applies the saved connection and the .bridge/ Compose
 | 항목 | 값 |
 | --- | --- |
 | Compose 프로젝트·로컬 이미지 | `kakaotalk-bridge`. `.env`의 `COMPOSE_PROJECT_NAME`을 바꾸면 다른 볼륨을 씀 |
-| 릴리스 이미지 | `ghcr.io/rokrokss/kakaotalk-bridge-*` |
+| 릴리스 이미지 | `ghcr.io/hellosunghyun/kakaotalk-bridge/*` |
 | Mac VM 설치 경로 | `/srv/kakaotalk-bridge` |
 | 태블릿의 Bridge 파일 | `/data/kakaotalk-bridge/` (root 전용) |
 | Android 키보드 앱 ID | `dev.kakaocollector.bridge`. Android가 이 ID로 활성 키보드를 저장하므로 유지 |

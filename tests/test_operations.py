@@ -79,7 +79,7 @@ def test_release_manifest_requires_immutable_official_refs(tmp_path):
         "schema": 1,
         "version": "v0.2.0",
         "images": {
-            kind: "ghcr.io/rokrokss/kakaotalk-bridge-" + kind + "@sha256:" + "a" * 64
+            kind: "ghcr.io/hellosunghyun/kakaotalk-bridge/" + kind + "@sha256:" + "a" * 64
             for kind in ("server", "device", "gateway")
         },
     }
@@ -88,7 +88,7 @@ def test_release_manifest_requires_immutable_official_refs(tmp_path):
     for bad in (
         "evil.example/server@sha256:" + "a" * 64,
         "ghcr.io/example/another-project-server@sha256:" + "a" * 64,
-        "ghcr.io/rokrokss/kakaotalk-bridge-server:latest",
+        "ghcr.io/hellosunghyun/kakaotalk-bridge/server:latest",
     ):
         data["images"]["server"] = bad
         path.write_text(json.dumps(data))

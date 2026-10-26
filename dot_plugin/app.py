@@ -466,7 +466,7 @@ def create_app(
 <p>MCP 서버를 추가할 때 아래 주소를 사용하고 OAuth 인증을 선택하세요.</p>
 <code class="endpoint">{escape(config.resource)}</code>
 <p>{instruction}</p>
-<p class="hint"><a href="https://github.com/rokrokss/kakaotalk-bridge/blob/main/docs/dot-plugin.md">연결 안내</a></p>""",
+<p class="hint"><a href="https://github.com/hellosunghyun/kakaotalk-bridge/blob/main/docs/dot-plugin.md">연결 안내</a></p>""",
             )
         )
         response.headers["Content-Security-Policy"] = (
@@ -676,7 +676,7 @@ def create_app(
                     if version in LEGACY_PROTOCOLS
                     else LEGACY_PROTOCOLS[0],
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "kakaotalk-bridge", "version": "0.3.2"},
+                    "serverInfo": {"name": "kakaotalk-bridge", "version": "0.4.0"},
                     "instructions": INSTRUCTIONS,
                 }
             raise RpcError("MCP_2026_07_28_required_use_server_discover", -32022)
@@ -746,7 +746,7 @@ def create_app(
                 "_meta": {
                     "io.modelcontextprotocol/serverInfo": {
                         "name": "kakaotalk-bridge",
-                        "version": "0.3.2",
+                        "version": "0.4.0",
                     }
                 },
             }

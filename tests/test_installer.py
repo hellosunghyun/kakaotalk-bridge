@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = "rokrokss/kakaotalk-bridge"
+REPOSITORY = "hellosunghyun/kakaotalk-bridge"
 
 # A stand-in for a version's CLI: record subprocess boundaries with the generation that
 # ran them, so a test can prove an upgrade never executes the installed (old) code.
@@ -86,7 +86,7 @@ MANIFEST = json.dumps(
         "schema": 1,
         "version": "v0.2.0",
         "images": {
-            kind: f"ghcr.io/{REPOSITORY}-{kind}@sha256:" + "b" * 64
+            kind: f"ghcr.io/{REPOSITORY}/{kind}@sha256:" + "b" * 64
             for kind in ("server", "device", "gateway")
         },
     }

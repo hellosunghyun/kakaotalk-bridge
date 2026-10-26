@@ -31,8 +31,10 @@ Bridge runs a virtual Android tablet with redroid, along with KakaoTalk and Iris
 Run this in a terminal on an Apple Silicon Mac or a Linux server. [Requirements](#requirements-and-validation)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
+
+> To have an AI coding agent install it from just this repository link, point it at [AGENTS.md](AGENTS.md).
 
 When it finishes, the admin console opens in your browser. From then on, run commands such as `kakaotalk-bridge doctor` from any folder. If Bridge is already installed, the same command updates it to the latest version for your install type. For a server without a display, see [installing over SSH](docs/quickstart.md#local-and-ssh-admin-access).
 
@@ -151,9 +153,9 @@ docker login ghcr.io
 Set the same tag in `.env`. Tags are the 7-character commit SHA and the branch name (`/` replaced with `-`). The device image also carries `iris-ee1dc978-collector-v8`.
 
 ```bash
-DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/device:<tag>
-SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/server:<tag>
-GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway:<tag>
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/gateway:<tag>
 
 docker compose pull api gateway device-agent iris-collector admin
 docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin

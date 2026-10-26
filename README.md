@@ -29,8 +29,10 @@ Bridge는 redroid로 가상 Android 태블릿을 띄우고 카카오톡과 Iris�
 Apple Silicon Mac 또는 Linux 서버의 터미널에서 실행하세요. [실행 환경](#requirements-and-validation)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
+
+> AI 코딩 에이전트에게 이 레포 링크만 주고 설치를 맡기려면 [AGENTS.md](AGENTS.md)를 읽게 하세요.
 
 끝나면 브라우저에 관리 화면이 열립니다. 이후에는 어느 폴더에서나 `kakaotalk-bridge doctor`처럼 명령을 실행합니다. 이미 설치했다면 같은 설치 명령이 설치 형태에 맞게 최신 버전으로 업데이트합니다. 화면 없는 서버는 [SSH 설치](docs/quickstart.md#local-and-ssh-admin-access)를 보세요.
 
@@ -149,9 +151,9 @@ docker login ghcr.io
 `.env`에 같은 태그를 적습니다. 태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`), 기기 이미지는 `iris-ee1dc978-collector-v8`입니다.
 
 ```bash
-DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/device:<tag>
-SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/server:<tag>
-GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway:<tag>
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/gateway:<tag>
 
 docker compose pull api gateway device-agent iris-collector admin
 docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin

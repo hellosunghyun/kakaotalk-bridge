@@ -8,10 +8,10 @@
 ## 릴리스를 검증해 설치
 
 ```bash
-git clone https://github.com/rokrokss/kakaotalk-bridge.git
+git clone https://github.com/hellosunghyun/kakaotalk-bridge.git
 cd kakaotalk-bridge
 # Download release.json from GitHub Releases into this folder, then:
-gh attestation verify release.json --repo rokrokss/kakaotalk-bridge
+gh attestation verify release.json --repo hellosunghyun/kakaotalk-bridge
 ./bridge install --manifest release.json
 ./bridge passkey-login
 ```
@@ -205,7 +205,7 @@ git push origin vX.Y.Z   # Runs the release workflow
 | 준비 | 내용 |
 | --- | --- |
 | 서명 키 | 보호된 GitHub `release` 환경에 `BRIDGE_RELEASE_KEYSTORE_BASE64`, `BRIDGE_RELEASE_KEY_PASSWORD`. 일반 업데이트에서 서명 식별자를 바꾸지 말 것 |
-| GHCR 공개 | 첫 게시 때 `ghcr.io/rokrokss/kakaotalk-bridge-server`, `-device`, `-gateway` 패키지를 Public으로. 설치 프로그램은 GHCR에 로그인하지 않음 |
+| GHCR 공개 | 첫 게시 때 `ghcr.io/hellosunghyun/kakaotalk-bridge/server`, `-device`, `-gateway` 패키지를 Public으로. 설치 프로그램은 GHCR에 로그인하지 않음 |
 | 릴리스 본문 | `docs/release-notes.md` |
 
 - 워크플로: pytest·Ruff → 양쪽 아키텍처 빌드 → SBOM·출처 메타데이터 → 익명 다운로드와 amd64·arm64 이미지 확인 → 게시. 공개 설정이 준비되지 않으면 멈추고, 미완성 릴리스를 최신 버전으로 안내하지 않습니다.

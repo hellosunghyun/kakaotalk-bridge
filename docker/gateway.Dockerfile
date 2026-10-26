@@ -15,6 +15,6 @@ FROM caddy:2.11.6-alpine@sha256:c776e0c6413b544d0459665e54ec7b8b2a15000c0cbee8b2
 RUN apk upgrade --no-cache
 COPY --from=download /out/caddy /usr/bin/caddy
 ARG VCS_REF=development
-ARG IMAGE_SOURCE=https://github.com/rokrokss/kakaotalk-bridge
+ARG IMAGE_SOURCE=https://github.com/hellosunghyun/kakaotalk-bridge
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${VCS_REF}"

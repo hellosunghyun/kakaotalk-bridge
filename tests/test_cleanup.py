@@ -58,7 +58,7 @@ def test_linux_removes_only_this_installation(root, tmp_path, monkeypatch):
             # Without --digests, Docker leaves the digest of digest-only release images empty.
             assert "--digests" in command
             return (
-                "ghcr.io/rokrokss/kakaotalk-bridge-server <none> sha256:aaa\n"
+                "ghcr.io/hellosunghyun/kakaotalk-bridge/server <none> sha256:aaa\n"
                 "kakaotalk-bridge/server local-0123 <none>\n"
                 "redroid/redroid <none> sha256:bbb\n"
                 "ghcr.io/openai/tunnel-client v0.0.15 sha256:ccc\n"
@@ -85,7 +85,7 @@ def test_linux_removes_only_this_installation(root, tmp_path, monkeypatch):
     ] in calls
     assert ["docker", "network", "rm", "n1"] in calls
     assert [command[-1] for command in calls if command[:3] == ["docker", "image", "rm"]] == [
-        "ghcr.io/rokrokss/kakaotalk-bridge-server@sha256:aaa",
+        "ghcr.io/hellosunghyun/kakaotalk-bridge/server@sha256:aaa",
         "kakaotalk-bridge/server:local-0123",
         "redroid/redroid@sha256:bbb",
         "ghcr.io/openai/tunnel-client:v0.0.15",

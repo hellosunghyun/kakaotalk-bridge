@@ -79,7 +79,7 @@ COPY iris/ /opt/iris-overlay/
 COPY docker/device.Dockerfile /opt/iris-build.Dockerfile
 # Declared last so a new revision does not bust the apt or pip layers.
 ARG VCS_REF=development
-ARG IMAGE_SOURCE=https://github.com/rokrokss/kakaotalk-bridge
+ARG IMAGE_SOURCE=https://github.com/hellosunghyun/kakaotalk-bridge
 # Keep in sync with device/iris.py BUILD. CI passes the value read from that file.
 ARG COLLECTOR_BUILD=iris-ee1dc978-collector-v8
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \

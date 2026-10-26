@@ -208,3 +208,17 @@ def test_flatten_apks_lifts_nested_platform_directory(tmp_path):
         check=False,
     )
     assert missing.returncode != 0
+
+
+def test_release_workflow_publishes_native_multiarch_images_and_release():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    assert 'tags: ["v*"]' in workflow
+    assert "ubuntu-24.04-arm" in workflow
+    assert "setup-qemu-action" not in workflow
+    assert "push-by-digest=true" in workflow
+    assert "imagetools create" in workflow
+    assert 'image="ghcr.io/${repo}/${kind}"' in workflow
+    assert "gh release create" in workflow
+    assert "scripts/build-release.py" in workflow
+    images = (ROOT / ".github/workflows/images.yml").read_text()
+    assert 'tags: ["**"]' not in images

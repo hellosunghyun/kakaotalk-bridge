@@ -8,7 +8,7 @@
 Apple Silicon Mac 또는 Linux의 터미널에서 실행하세요.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
 
 - 끝나면 브라우저에 관리 화면이 열립니다.
@@ -74,7 +74,7 @@ kakaotalk-bridge cleanup     # Delete Bridge, its data and backups (shared tools
 
 ```bash
 # Same command as install
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 
 # Or (add --version <tag> to pick one)
 kakaotalk-bridge upgrade
@@ -94,7 +94,7 @@ git pull && kakaotalk-bridge update --source
 설치 명령에서는 `bash -s --` 뒤에, 설치한 뒤에는 `kakaotalk-bridge up` 뒤에 붙이세요.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh \
   | bash -s -- --no-browser
 kakaotalk-bridge up --no-browser
 ```
@@ -116,14 +116,14 @@ kakaotalk-bridge up --no-browser
 
 **기존 HTTPS 프록시:** 한 HTTPS 출처를 공용 진입점 `127.0.0.1:18787`로 전달한 뒤 `kakaotalk-bridge up --url https://bridge.example.com`을 실행하세요. 관리 화면은 `/admin/`, AI는 `/mcp`를 씁니다. 로그인 화면까지 숨기려면 프록시에서 `/admin`, `/admin/*`를 막으세요.
 
-**수동 다운로드:** [GitHub Releases](https://github.com/rokrokss/kakaotalk-bridge/releases)에서 `bridge-install.tar.gz`를 받아 풀고 `bash install.sh`를 실행해도 됩니다. 출처 증명 확인은 [고급 설치](onboarding.md#install)를 보세요.
+**수동 다운로드:** [GitHub Releases](https://github.com/hellosunghyun/kakaotalk-bridge/releases)에서 `bridge-install.tar.gz`를 받아 풀고 `bash install.sh`를 실행해도 됩니다. 출처 증명 확인은 [고급 설치](onboarding.md#install)를 보세요.
 
 <a id="local-and-ssh-admin-access"></a>
 ## 원격 서버에 설치 (SSH)
 
 ```bash
 # On the server
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh \
   | bash -s -- --no-browser
 ```
 
@@ -142,7 +142,7 @@ ssh -N -L 127.0.0.1:18789:127.0.0.1:18789 user@your-server
 ## 소스에서 실행 (개발용)
 
 ```bash
-git clone https://github.com/rokrokss/kakaotalk-bridge.git
+git clone https://github.com/hellosunghyun/kakaotalk-bridge.git
 cd kakaotalk-bridge
 bash install.sh --source   # Builds the images and Android components locally
 ```

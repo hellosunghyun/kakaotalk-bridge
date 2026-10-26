@@ -23,7 +23,7 @@ COPY LICENSE .
 USER collector
 # Declared last so a new revision does not bust the apt or pip layers.
 ARG VCS_REF=development
-ARG IMAGE_SOURCE=https://github.com/rokrokss/kakaotalk-bridge
+ARG IMAGE_SOURCE=https://github.com/hellosunghyun/kakaotalk-bridge
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.licenses="MIT"
