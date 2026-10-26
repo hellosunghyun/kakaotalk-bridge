@@ -29,6 +29,11 @@ from pydantic import (
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_ATTACHMENTS = 10
+# A submitted send is paired only with rows collected within this window. KakaoTalk can
+# drop a share silently; without a bound that request stayed pending and later claimed
+# the next send's message (seen on device: a stuck video matched a video sent 20 minutes
+# later). Video uploads were confirmed within about a minute.
+MATCH_WINDOW_SECONDS = 10 * 60
 
 # MIME → (kind, canonical extension). The filename extension must agree.
 MEDIA_TYPES = {
@@ -629,12 +634,15 @@ class Outgoing:
 
     def confirm_all(self):
         """Pair each submitted send with the earliest later is_mine row of the expected type."""
+        now = time.time()
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             pending = db.execute(
                 "SELECT request_id, conversation_ref, expected_types, match_after_seq "
                 "FROM outgoing WHERE status='submitted' AND matched_message_id IS NULL "
-                "AND match_after_seq IS NOT NULL ORDER BY created_at, request_id"
+                "AND match_after_seq IS NOT NULL AND created_at>=? "
+                "ORDER BY created_at, request_id",
+                (now - MATCH_WINDOW_SECONDS,),
             ).fetchall()
             used = {
                 row[0]
@@ -642,7 +650,6 @@ class Outgoing:
                     "SELECT matched_message_id FROM outgoing WHERE matched_message_id IS NOT NULL"
                 )
             }
-            now = time.time()
             for item in pending:
                 try:
                     types = json.loads(item["expected_types"])

@@ -14,6 +14,7 @@ from device import iris
 from device.media_stage import STAGE, staged_name, sweep
 from device.screen import ScreenBusy, lock_state, screen_lock, screen_off
 from device.ui_driver import ROOM_ACTIVITY, UiDriver
+from server import outgoing
 from server.outgoing import OutgoingRequest
 from tests.test_api import INGEST, auth
 from tests.test_iris import CONFIG, row
@@ -182,6 +183,29 @@ def test_ui_actions_stay_off_until_the_flag_and_a_visible_source_exist(sending, 
     assert enqueue(client, blank).json() == {"error": "reply_source_has_no_visible_text"}
     other = body | {"request_id": str(uuid4()), "reply_to": "999"}
     assert enqueue(client, other).json() == {"error": "reply_source_not_found"}
+
+
+def test_a_stale_submitted_send_does_not_claim_a_later_message(sending, monkeypatch):
+    collector, client, page, body = sending
+    stale = body | {"request_id": str(uuid4())}
+    enqueue(client, stale)
+    original = iris.request
+
+    def submit(url, payload=None, token=None):
+        if str(url).endswith("/collector/send"):
+            return {**payload, "status": "submitted", "build": iris.BUILD, "high_water": "11"}
+        return original(url, payload, token)
+
+    monkeypatch.setattr(iris, "request", submit)
+    collector.send_pending(CONFIG)
+    # Every submitted send is now older than the window.
+    monkeypatch.setattr(outgoing, "MATCH_WINDOW_SECONDS", -1)
+    page["rows"] = [row(12, is_mine=True, message_type="1", message="later")]
+    page["high_water"] = "12"
+    collector.tick()
+    late = status(client, stale)
+    assert late["delivery_confirmed"] is False
+    assert late["matched_message_id"] is None
 
 
 def test_location_accepts_integer_coordinates_only_when_enabled(sending, monkeypatch):
