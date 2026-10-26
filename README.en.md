@@ -130,8 +130,8 @@ The Mac VM is configured with 6 CPUs and 8 GiB of memory. This is not a measured
 ## Your data and collection scope
 
 - **Retention:** Collected messages are kept on the server you installed indefinitely by default. Results you request are sent to the AI you connected.
-- **Permissions:** MCP supports search and lookup, plus text sending under a separate permission. It provides no tools for controlling the tablet.
-- **Collection scope:** Text shown on the secondary tablet is stored. Photos and files are fetched on demand and are not stored. Your phone's full history and edit or delete sync are not supported. Sending remains text only.
+- **Permissions:** MCP supports search and lookup, plus text and media sending under a separate permission. Quote replies, emoticons, and locations need `KAKAO_UI_ACTIONS`, which is off by default. It provides no general-purpose tablet control tools.
+- **Collection scope:** Text shown on the secondary tablet is stored. Received photos and files are fetched on demand and are not stored. Your phone's full history and edit or delete sync are not supported.
 - **Read status:** Opening a conversation on the tablet may change its read status.
 
 The official redroid image ships an outdated Android security patch, so use a dedicated host or VM.

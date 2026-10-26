@@ -75,6 +75,7 @@ services:
       DEVICE_ID: ${DEVICE_ID:-personal-tablet}
       RETENTION_DAYS: ${RETENTION_DAYS:-0}
       DB_PATH: /data/collector.db
+      KAKAO_UI_ACTIONS: ${KAKAO_UI_ACTIONS:-}
       IRIS_COLLECTOR_URL: http://iris-collector:3010
     secrets: [ingest_token, read_token, send_token, device_token, backup_key]
     volumes: [collector-data:/data]
@@ -133,6 +134,7 @@ services:
       ADB_TARGET: redroid:5555
       DEVICE_ID: ${DEVICE_ID:-personal-tablet}
       API_URL: http://api:8000
+      KAKAO_UI_ACTIONS: ${KAKAO_UI_ACTIONS:-}
     volumes: [iris-state:/state]
     secrets: [ingest_token]
     networks: [device-net, backend-net]

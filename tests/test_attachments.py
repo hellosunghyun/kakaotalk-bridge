@@ -389,11 +389,30 @@ def test_attachment_request_reports_code_only(monkeypatch):
     assert "http" not in str(caught.value)
 
 
-def test_send_tools_do_not_grow_quote_or_media_parameters():
+def test_send_tools_cover_media_quote_emoticon_and_location():
     names = {tool["name"] for tool in tool_definitions()}
-    assert "send_image" not in names and "send_media" not in names
+    assert "send_image" not in names
+    assert {"send_media", "send_emoticon", "send_location"} <= names
     send = next(tool for tool in tool_definitions() if tool["name"] == "send_message")
-    assert set(send["inputSchema"]["properties"]) == {"conversation_ref", "text", "request_id"}
+    assert set(send["inputSchema"]["properties"]) == {
+        "conversation_ref",
+        "text",
+        "request_id",
+        "thread_id",
+        "reply_to",
+    }
+    media = next(tool for tool in tool_definitions() if tool["name"] == "send_media")
+    assert set(media["inputSchema"]["properties"]) == {
+        "conversation_ref",
+        "request_id",
+        "attachments",
+    }
+    assert media["annotations"]["readOnlyHint"] is False
+    assert "kakao.send" in media["securitySchemes"][0]["scopes"]
+    for name in ("send_emoticon", "send_location"):
+        tool = next(item for item in tool_definitions() if item["name"] == name)
+        assert tool["annotations"]["destructiveHint"] is True
+        assert "kakao.send" in tool["securitySchemes"][0]["scopes"]
     image = next(tool for tool in tool_definitions() if tool["name"] == "get_message_image")
     assert image["annotations"]["openWorldHint"] is True
     assert image["annotations"]["readOnlyHint"] is True

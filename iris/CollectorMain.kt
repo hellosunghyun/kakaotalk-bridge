@@ -28,7 +28,7 @@ object CollectorMain {
     private const val DB = "$KAKAO/databases/KakaoTalk.db"
     private const val PROFILE_DB = "$KAKAO/databases/KakaoTalk2.db"
     private const val ACCOUNT = "$KAKAO/files/datastore/LocalUser_DataStore.pref.preferences_pb"
-    private const val BUILD = "iris-ee1dc978-collector-v7"
+    private const val BUILD = "iris-ee1dc978-collector-v8"
     private const val PAGE_ROWS = 200
     private const val PAGE_CHARS = 2 * 1024 * 1024
     private val readOnlyErrorHandler = android.database.DatabaseErrorHandler { throw IllegalStateException("source_database_unavailable") }
@@ -261,25 +261,58 @@ object CollectorMain {
                             val stat = Os.stat(DB)
                             require(body.getString("database_id") == "${stat.st_dev}:${stat.st_ino}")
                             val chat = body.getString("chat_id").toLong()
+                            var high = 0L
                             SQLiteDatabase.openDatabase(DB,null,SQLiteDatabase.OPEN_READONLY,readOnlyErrorHandler).use { db ->
                                 db.rawQuery("SELECT id FROM chat_rooms WHERE id=?",arrayOf(chat.toString())).use {
                                     require(it.moveToFirst())
                                 }
+                                high = db.rawQuery("SELECT COALESCE(MAX(_id),0) FROM chat_logs", null).use {
+                                    it.moveToFirst(); it.getLong(0)
+                                }
                             }
-                            val intent = CollectorSender.prepare(chat, body.getString("text"))
-                            require(approved().toString() == result.toString())
-                            attempted = true
-                            CollectorSender.submit(intent)
+                            val attachments = body.optJSONArray("attachments")
+                            if (attachments != null && attachments.length() > 0) {
+                                require(attachments.length() <= 10)
+                                require(!body.has("text") || body.isNull("text"))
+                                val files = mutableListOf<Pair<File, String>>()
+                                for (i in 0 until attachments.length()) {
+                                    val item = attachments.getJSONObject(i)
+                                    val kind = item.getString("kind")
+                                    files.add(CollectorSender.stagedFile(item.getString("name"), kind) to kind)
+                                }
+                                require(approved().toString() == result.toString())
+                                CollectorSender.ensureAwake()
+                                val intent = CollectorSender.prepareMedia(chat, files)
+                                attempted = true
+                                val code = CollectorSender.submitActivity(intent)
+                                if (code < 0) {
+                                    attempted = false
+                                    throw IllegalStateException("kakao_activity_rejected")
+                                }
+                            } else {
+                                val thread = if (body.has("thread_id") && !body.isNull("thread_id"))
+                                    body.getString("thread_id").toLong() else null
+                                val intent = CollectorSender.prepare(chat, body.getString("text"), thread)
+                                require(approved().toString() == result.toString())
+                                attempted = true
+                                CollectorSender.submit(intent)
+                            }
                             require(approved().toString() == result.toString())
                             JSONObject().put("build",BUILD).put("status","submitted")
                                 .put("enrollment_epoch",epoch).put("database_id",body.getString("database_id"))
-                                .put("request_id",requestId).toString()
+                                .put("request_id",requestId).put("high_water", high.toString()).toString()
                         }
                         call.respondText(response,ContentType.Application.Json)
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
                         // An exception after IPC may still have sent. Never claim a safe retry.
-                        call.respondText(JSONObject().put("status",if (attempted) "unknown" else "failed")
-                            .toString(),ContentType.Application.Json)
+                        // Only a fixed reason code is returned; exception text can contain a path.
+                        val known = setOf(
+                            "screen_locked", "screen_state_unreadable", "kakao_activity_rejected"
+                        )
+                        val reason = if (!attempted && error.message in known) error.message else null
+                        val payload = JSONObject().put("status", if (attempted) "unknown" else "failed")
+                        if (reason != null) payload.put("reason", reason)
+                        call.respondText(payload.toString(), ContentType.Application.Json)
                     }
                 }
                 get("/collector/health") {

@@ -17,9 +17,9 @@ MCP는 본문과 함께 확인된 발신자·대화방 이름, 본인 메시지 
 
 ## 메시지 결과와 페이지 조회
 
-현재 계정으로 메시지를 보내려면 여기서 조회한 정확한 대화 참조를 사용하세요. `send_message`와 `get_message_send_status`의 권한·인수·제한은 [메시지 전송](sending.md)에 설명합니다.
+현재 계정으로 메시지를 보내려면 여기서 조회한 정확한 대화 참조를 사용하세요. `send_message`, `send_media`, `send_emoticon`, `send_location`, `get_message_send_status`의 권한·인수·제한은 [메시지 전송](sending.md)에 설명합니다.
 
-결과에는 `message_id`, 대화·발신자 정보, `is_mine`, `sent_at`, `collected_at`, `body`, `message_type`, `attachment_type`, `has_attachment`, `source`, `truncated`가 포함됩니다. 사용자에게 설명할 메시지 시각은 `sent_at`이며 `collected_at`은 수집기가 저장한 시각입니다. 발신 시각을 모르면 null로 유지하며 최신 결과의 마지막에 정렬하고 시간 필터에는 포함하지 않습니다. `attachment_type`과 `has_attachment`는 이미 저장된 종류 코드로만 계산합니다. URL과 바이트는 목록에 없습니다. 텍스트(종류 1)의 멘션·링크 미리보기는 코드만으로는 알 수 없으므로 `has_attachment`가 false여도 `get_message_attachment`로 확인할 수 있습니다.
+결과에는 `message_id`, `log_id`(카카오톡 `chat_logs._id`, 인용의 `reply_to`에 사용), 대화·발신자 정보, `is_mine`, `sent_at`, `collected_at`, `body`, `message_type`, `attachment_type`, `has_attachment`, `source`, `truncated`가 포함됩니다. `message_id`와 `log_id`는 다릅니다. 사용자에게 설명할 메시지 시각은 `sent_at`이며 `collected_at`은 수집기가 저장한 시각입니다. 발신 시각을 모르면 null로 유지하며 최신 결과의 마지막에 정렬하고 시간 필터에는 포함하지 않습니다. `attachment_type`과 `has_attachment`는 이미 저장된 종류 코드로만 계산합니다. URL과 바이트는 목록에 없습니다. 텍스트(종류 1)의 멘션·링크 미리보기는 코드만으로는 알 수 없으므로 `has_attachment`가 false여도 `get_message_attachment`로 확인할 수 있습니다.
 
 같은 필터로 `next_cursor`를 `cursor`에 넣으면 다음 과거 페이지를 조회합니다. 서명된 커서는 메시지 스냅샷과 정렬 경계를 고정합니다. 필터 변경, DB 복구, 보관 기간 정리는 커서를 무효화합니다. `sender_name`이나 방 이름 `q` 필터는 표시 정보·닉네임 근거가 바뀌어도 만료되지만 동일한 메타데이터 갱신은 영향을 주지 않습니다. `invalid_query_or_expired_cursor`가 나오면 커서 없이 다시 시작하세요. 다른 조회는 메시지 스냅샷을 유지하면서 페이지 사이 이름이 갱신될 수 있습니다.
 
@@ -97,4 +97,4 @@ MCP는 본문과 함께 확인된 발신자·대화방 이름, 본인 메시지 
 
 Iris는 자동으로 업데이트됩니다. 실행 중인 Iris가 이미지의 빌드가 아니면 수집기가 프로세스를 멈추고, 기기의 APK를 이미지 안 APK와 SHA-256으로 비교해 다르면 검증한 업로드로 교체한 뒤 다시 시작합니다. 이 교체는 redroid 안의 `app_process`만 다시 시작합니다. redroid 컨테이너를 다시 시작하거나 `android-data` 볼륨을 지우면 카카오톡 로그인이 사라지므로 하지 않습니다. `kakaotalk-bridge upgrade`·`kakaotalk-bridge update`의 이미지 변경과 되돌리기 모두 별도 명령이 필요하지 않으며 카카오톡 재설치, 재로그인, 승인 변경은 하지 않습니다. 이름 조회 상태는 `get_collector_status`로 확인하세요. 자세한 경계는 [Iris](iris.md#iris-build-and-runtime-boundaries)를 참고하세요.
 
-첨부 조회가 포함된 빌드(`iris-ee1dc978-collector-v7`)를 올리려면 `device` 이미지로 `iris-collector`를, `server` 이미지로 `api`, `dot-plugin`, `mcp`를 다시 만듭니다. 예: `docker compose up -d --no-deps --build iris-collector api dot-plugin mcp`. `redroid`는 이 명령에 넣지 않습니다. 새 APK가 뜨지 않으면 수집이 `iris_start_failed`로 잠시 멈추고 redroid와 로그인은 유지됩니다. 이전 이미지로 같은 방식 되돌리면 건강 확인이 빌드가 다르다고 보고, 수집기가 이전 APK를 설치한 뒤 `app_process`만 다시 시작합니다.
+미디어 전송이 포함된 빌드(`iris-ee1dc978-collector-v8`)를 올리려면 `device` 이미지로 `iris-collector`를, `server` 이미지로 `api`, `dot-plugin`, `mcp`를 다시 만듭니다. 예: `docker compose up -d --no-deps --build iris-collector api dot-plugin mcp`. `redroid`는 이 명령에 넣지 않습니다. 새 APK가 뜨지 않으면 수집이 `iris_start_failed`로 잠시 멈추고 redroid와 로그인은 유지됩니다. 이전 이미지로 같은 방식 되돌리면 건강 확인이 빌드가 다르다고 보고, 수집기가 이전 APK를 설치한 뒤 `app_process`만 다시 시작합니다. 인용·이모티콘·위치는 두 서비스의 `KAKAO_UI_ACTIONS=on`이 있을 때만 동작합니다.

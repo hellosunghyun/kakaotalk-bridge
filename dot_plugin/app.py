@@ -23,7 +23,7 @@ from dot_plugin.storage import State
 from dot_plugin.webhooks import Forwarder
 from server.app import BodyLimit
 from server.mcp_content import file_result, file_summary, image_result, image_summary
-from server.outgoing import SendMessage, SendStatus
+from server.outgoing import SendEmoticon, SendLocation, SendMedia, SendMessage, SendStatus
 from server.query_models import ContextPage, ConversationPage, MessagePage
 
 INSTRUCTIONS = """KakaoTalk Bridge queries messages and sends text as the owner's logged-in account.
@@ -45,7 +45,7 @@ Repeat while has_more is true, including empty filtered pages. Empty results aft
 Never infer phone-session health or KakaoTalk unread/read state from these cursors. Do not promise native event subscription until events/subscribe succeeds.
 Subscription webhooks have no protocol replay; the durable pending-message tools provide recovery within collector retention.
 Photos, files and other attachments are not stored. get_message_attachment reads sanitized metadata for one message_id. get_message_image and get_message_file download bytes on demand, only from Kakao CDNs, with a size cap. Listings and webhooks only include attachment_type and has_attachment.
-Sending is text only. A native quote reply and media, link, emoticon or location sends are not available.
+send_message sends text. thread_id is a notification thread, not a quote. reply_to quotes log_id and needs KAKAO_UI_ACTIONS. send_media sends one kind of image, video, audio, or file. send_emoticon and send_location also need KAKAO_UI_ACTIONS, which is off by default. Opening a room for those UI sends marks it read. delivery_confirmed matches a later collected is_mine row of the expected type; it is not a KakaoTalk receipt. Never resend an unknown attempt.
 """
 
 # tunnel-client v0.0.15 probes with older MCP protocol versions at startup.
@@ -155,11 +155,23 @@ class Ack(Strict):
 TOOLS = {
     "send_message": (
         SendMessage,
-        "사용자가 요청한 텍스트를 내 카카오톡 계정으로 기존 대화방에 전송합니다. 조회한 정확한 conversation_ref와 새 UUID request_id가 필요합니다. 재시도에는 같은 ID·본문을 사용하세요. 이후 get_message_send_status로 확인하며 submitted는 상대방 전달 확인이 아닙니다.",
+        "사용자가 요청한 텍스트를 내 카카오톡 계정으로 기존 대화방에 전송합니다. 조회한 정확한 conversation_ref와 새 UUID request_id가 필요합니다. thread_id는 알림 스레드이며 인용 답장이 아닙니다. reply_to는 메시지의 log_id로, 인용(답장)이며 KAKAO_UI_ACTIONS가 켜져 있어야 합니다. 재시도에는 같은 ID·본문을 사용하세요.",
+    ),
+    "send_media": (
+        SendMedia,
+        "사진·동영상·음성·파일을 전송합니다. attachments의 name, mime, data_base64를 쓰고 한 요청에는 같은 종류만 담으세요. 재시도에는 같은 request_id와 같은 바이트가 필요합니다. 잠금화면에서는 보내지 않습니다.",
+    ),
+    "send_emoticon": (
+        SendEmoticon,
+        "즐겨찾기에 있는 보유 이모티콘을 favorite_index 칸으로 보냅니다. KAKAO_UI_ACTIONS가 켜져 있어야 하며 기본은 꺼짐입니다. 대화방을 열면 그 방이 읽음 처리됩니다.",
+    ),
+    "send_location": (
+        SendLocation,
+        "지도로 위치를 보냅니다. 위도·경도가 필요하고 제목 또는 주소가 있으면 검색에 씁니다. KAKAO_UI_ACTIONS가 필요합니다. 26.9.1에서는 종류 100으로 기록될 수 있습니다.",
     ),
     "get_message_send_status": (
         SendStatus,
-        "request_id로 전송 상태를 확인합니다. unknown은 결과 불명이며 자동 재전송하지 마세요. submitted는 카카오톡 앱에 전달한 상태이고 상대방 수신을 보장하지 않습니다.",
+        "request_id로 전송 상태를 확인합니다. unknown은 결과 불명이며 자동 재전송하지 마세요. submitted는 카카오톡에 넘긴 상태입니다. delivery_confirmed는 그 뒤에 수집된 내 메시지가 기대 종류와 맞는 경우입니다.",
     ),
     "get_pending_messages": (
         Pending,
@@ -208,8 +220,11 @@ TOOLS = {
 }
 
 
+SEND_TOOLS = {"send_message", "send_media", "send_emoticon", "send_location"}
+
+
 def scopes_for(name):
-    if name in {"send_message", "get_message_send_status"}:
+    if name in SEND_TOOLS or name == "get_message_send_status":
         return ["kakao.send"]
     if name == "get_pending_messages":
         return ["kakao.read", "kakao.events"]
@@ -224,11 +239,11 @@ def tool_definitions(*, oauth=True):
             "description": description,
             "inputSchema": schema.model_json_schema(),
             "annotations": {
-                "readOnlyHint": name not in {"acknowledge_messages", "send_message"},
-                "destructiveHint": name == "send_message",
+                "readOnlyHint": name not in {"acknowledge_messages", *SEND_TOOLS},
+                "destructiveHint": name in SEND_TOOLS,
                 "idempotentHint": True,
                 "openWorldHint": name
-                in {"send_message", "get_message_image", "get_message_file"},
+                in {*SEND_TOOLS, "get_message_image", "get_message_file"},
             },
             "securitySchemes": [
                 {
@@ -563,11 +578,11 @@ def create_app(
         except ValidationError:
             raise RpcError("invalid_tool_arguments") from None
         args = arguments.model_dump()
-        if name in {"send_message", "get_message_send_status"}:
+        if name in SEND_TOOLS or name == "get_message_send_status":
             try:
                 output = (
-                    collector.outgoing(body=args)
-                    if name == "send_message"
+                    collector.outgoing(body={k: v for k, v in args.items() if v is not None})
+                    if name in SEND_TOOLS
                     else collector.outgoing(request_id=args["request_id"])
                 )
             except QueryError as exc:

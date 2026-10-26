@@ -37,6 +37,9 @@ class MessageView(BaseModel):
     message_id: int = Field(
         description="Opaque collector message ID, suitable for get_conversation_context."
     )
+    log_id: str = Field(
+        description="KakaoTalk chat_logs id. Pass this as send_message reply_to to quote the row."
+    )
     conversation: RoomView
     sender: SenderView
     is_mine: bool | None

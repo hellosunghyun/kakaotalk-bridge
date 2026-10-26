@@ -123,10 +123,11 @@ class Collector:
             },
         )
         try:
-            with urlopen(request, timeout=15) as response:
+            timeout = 60 if body is not None and len(request.data or b"") > 100_000 else 15
+            with urlopen(request, timeout=timeout) as response:
                 return json.load(response)
         except HTTPError as exc:
-            if exc.code in {400, 404, 409, 422, 423, 429, 503}:
+            if exc.code in {400, 403, 404, 409, 422, 423, 429, 503}:
                 # API errors are bounded codes, never user content.
                 try:
                     reason = json.loads(exc.read(4096)).get("error")
@@ -140,6 +141,9 @@ class Collector:
                     "send_rate_limited",
                     "send_request_not_found",
                     "sending_not_configured",
+                    "ui_actions_disabled",
+                    "reply_source_not_found",
+                    "reply_source_has_no_visible_text",
                 }
                 raise QueryError(
                     reason

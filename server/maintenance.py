@@ -86,6 +86,9 @@ def restore(source: str, db_path: str, replace=False):
                 (str(uuid.uuid4()),),
             )
             instant = datetime.now(UTC).isoformat()
+            from server.outgoing import scrub_restored_queue
+
+            scrub_restored_queue(restored)
             restored.execute(
                 "UPDATE outgoing SET status='unknown',reason='backup_restored',text=NULL "
                 "WHERE status IN ('queued','dispatching')"
