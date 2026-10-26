@@ -28,12 +28,18 @@
 | `search_messages` | 본문 부분 문자열 검색, 대화·발신자·시간 필터 |
 | `list_conversations` | 구분된 대화 목록, 확인 가능한 이름·최근 시각·보관 건수 |
 | `get_conversation_context` | 같은 대화의 특정 메시지 앞뒤 문맥 |
+| `get_message_attachment` | 한 메시지의 첨부 메타데이터 (`kakao.read`) |
+| `get_message_image` | 크기 제한 이미지 (`kakao.read`, 카카오 CDN만) |
+| `get_message_file` | 크기 제한 파일 (`kakao.read`, 명시적 요청) |
 | `get_collector_status` | 수집 상태와 현재 연결의 구독·전달 상태 |
 | `get_profile` | 연결을 식별하는 불투명 프로필 ID |
 | `get_pending_messages` | 소비자의 미처리 메시지 조회 |
 | `acknowledge_messages` | 조회한 페이지까지 처리 완료 기록 |
-| `send_message` | 현재 계정으로 정확한 대화방에 텍스트 전송 (`kakao.send` 필요) |
-| `get_message_send_status` | 요청 UUID로 전송 상태 확인 (`kakao.send` 필요) |
+| `send_message` | 텍스트 전송. 선택적 `thread_id`(알림 스레드)와 `reply_to`(`log_id` 인용, UI 플래그 필요) |
+| `send_media` | 사진·동영상·음성·파일 (`kakao.send`) |
+| `send_emoticon` | 즐겨찾기 이모티콘. `KAKAO_UI_ACTIONS` 필요 |
+| `send_location` | 지도 위치. `KAKAO_UI_ACTIONS` 필요 |
+| `get_message_send_status` | 요청 UUID로 전송 상태와 `delivery_confirmed` 확인 (`kakao.send` 필요) |
 
 최근·검색 결과는 발신 시각 내림차순이며 불투명 커서를 사용합니다. 대화 필터는 개수 제한 전에 적용합니다. 이름·시간·문맥·호환성은 [메시지 조회](mcp-queries.md)를 참고하세요. 전송에는 별도 `kakao.send` 동의가 필요하며 기존 승인은 자동 확장되지 않습니다. 클라이언트에서 전송 범위를 요청해 다시 연결하세요. [전송 권한·상태·제한](sending.md)을 참고하세요. 로그인·ADB 조작 도구는 없습니다.
 

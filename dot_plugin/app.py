@@ -4,7 +4,7 @@ import time
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -20,8 +20,10 @@ from dot_plugin.pages import browser_page, error_page, page
 # Pages a person opens in a browser; protocol endpoints keep JSON errors.
 BROWSER_ROUTES = {"/authorize", "/authorize/passkey/consent"}
 from dot_plugin.storage import State
+from dot_plugin.webhooks import Forwarder
 from server.app import BodyLimit
-from server.outgoing import SendMessage, SendStatus
+from server.mcp_content import file_result, file_summary, image_result, image_summary
+from server.outgoing import SendEmoticon, SendLocation, SendMedia, SendMessage, SendStatus
 from server.query_models import ContextPage, ConversationPage, MessagePage
 
 INSTRUCTIONS = """KakaoTalk Bridge queries messages and sends text as the owner's logged-in account.
@@ -42,10 +44,15 @@ Process each page, then acknowledge_messages with that page's next_cursor and cu
 Repeat while has_more is true, including empty filtered pages. Empty results after acknowledgment mean there is nothing new to report.
 Never infer phone-session health or KakaoTalk unread/read state from these cursors. Do not promise native event subscription until events/subscribe succeeds.
 Subscription webhooks have no protocol replay; the durable pending-message tools provide recovery within collector retention.
+Photos, files and other attachments are not stored. get_message_attachment reads sanitized metadata for one message_id. get_message_image and get_message_file download bytes on demand, only from Kakao CDNs, with a size cap. Listings and webhooks only include attachment_type and has_attachment.
+send_message sends text. thread_id is a notification thread, not a quote. reply_to quotes log_id and needs KAKAO_UI_ACTIONS. send_media sends one kind of image, video, audio, or file. send_emoticon and send_location also need KAKAO_UI_ACTIONS, which is off by default. Opening a room for those UI sends marks it read. delivery_confirmed matches a later collected is_mine row of the expected type; it is not a KakaoTalk receipt. Never resend an unknown attempt.
 """
 
 # tunnel-client v0.0.15 probes with older MCP protocol versions at startup.
+# Public OAuth clients that predate 2026-07-28 (e.g. mcp-remote) use the same legacy
+# initialize handshake; server/discover remains the 2026-07-28 path.
 TUNNEL_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+LEGACY_PROTOCOLS = TUNNEL_PROTOCOLS
 TUNNEL_DISCOVERY = {
     "initialize",
     "notifications/initialized",
@@ -122,6 +129,18 @@ class Context(Strict):
     after: Annotated[int, Field(ge=0, le=30)] = 5
 
 
+class AttachmentQuery(Strict):
+    message_id: Annotated[
+        int,
+        Field(ge=1, description="Collected message_id. Not a raw KakaoTalk log id."),
+    ]
+
+
+class ImageQuery(AttachmentQuery):
+    variant: Literal["thumbnail", "original"] = "thumbnail"
+    index: Annotated[int, Field(ge=0, le=29)] = 0
+
+
 class Pending(Strict):
     consumer_id: Consumer = "dot"
     limit: Limit = 50
@@ -136,11 +155,23 @@ class Ack(Strict):
 TOOLS = {
     "send_message": (
         SendMessage,
-        "사용자가 요청한 텍스트를 내 카카오톡 계정으로 기존 대화방에 전송합니다. 조회한 정확한 conversation_ref와 새 UUID request_id가 필요합니다. 재시도에는 같은 ID·본문을 사용하세요. 이후 get_message_send_status로 확인하며 submitted는 상대방 전달 확인이 아닙니다.",
+        "사용자가 요청한 텍스트를 내 카카오톡 계정으로 기존 대화방에 전송합니다. 조회한 정확한 conversation_ref와 새 UUID request_id가 필요합니다. thread_id는 알림 스레드이며 인용 답장이 아닙니다. reply_to는 메시지의 log_id로, 인용(답장)이며 KAKAO_UI_ACTIONS가 켜져 있어야 합니다. 재시도에는 같은 ID·본문을 사용하세요.",
+    ),
+    "send_media": (
+        SendMedia,
+        "사진·동영상·음성·파일을 전송합니다. attachments의 name, mime, data_base64를 쓰고 한 요청에는 같은 종류만 담으세요. 재시도에는 같은 request_id와 같은 바이트가 필요합니다. 잠금화면에서는 보내지 않습니다.",
+    ),
+    "send_emoticon": (
+        SendEmoticon,
+        "즐겨찾기에 있는 보유 이모티콘을 favorite_index 칸으로 보냅니다. KAKAO_UI_ACTIONS가 켜져 있어야 하며 기본은 꺼짐입니다. 대화방을 열면 그 방이 읽음 처리됩니다.",
+    ),
+    "send_location": (
+        SendLocation,
+        "지도로 위치를 보냅니다. 위도·경도가 필요하고 제목 또는 주소가 있으면 검색에 씁니다. KAKAO_UI_ACTIONS가 필요합니다. 26.9.1에서는 종류 100으로 기록될 수 있습니다.",
     ),
     "get_message_send_status": (
         SendStatus,
-        "request_id로 전송 상태를 확인합니다. unknown은 결과 불명이며 자동 재전송하지 마세요. submitted는 카카오톡 앱에 전달한 상태이고 상대방 수신을 보장하지 않습니다.",
+        "request_id로 전송 상태를 확인합니다. unknown은 결과 불명이며 자동 재전송하지 마세요. submitted는 카카오톡에 넘긴 상태입니다. delivery_confirmed는 그 뒤에 수집된 내 메시지가 기대 종류와 맞는 경우입니다.",
     ),
     "get_pending_messages": (
         Pending,
@@ -166,6 +197,18 @@ TOOLS = {
         Context,
         "반환된 message_id와 같은 대화의 앞뒤 메시지를 시간순으로 조회합니다. 수집된 문맥만 제공됩니다. 단독 답변을 해석하기 전에 사용하세요.",
     ),
+    "get_message_attachment": (
+        AttachmentQuery,
+        "메시지 하나의 첨부 메타데이터를 기기 DB에서 그때그때 읽습니다. URL과 바이트는 저장하지 않습니다. 목록의 attachment_type은 종류 코드 힌트이며, 텍스트의 멘션·링크는 이 도구로 확인합니다.",
+    ),
+    "get_message_image": (
+        ImageQuery,
+        "사진·다중 사진·영상 썸네일 등 볼 수 있는 이미지를 받아 반환합니다. variant는 thumbnail 또는 original, index는 0부터입니다. 영상 원본은 받지 않습니다. 카카오 CDN만 허용하고 결과는 2MiB 이하입니다.",
+    ),
+    "get_message_file": (
+        AttachmentQuery,
+        "파일 메시지를 명시적으로 받습니다. 2MiB를 넘으면 거절합니다. 이름·크기·형식을 함께 반환합니다.",
+    ),
     "get_collector_status": (
         Empty,
         "수집 상태, 부분 수집 범위와 현재 연결의 웹훅 전달 수를 확인합니다. 웹훅 수신만으로 Dot의 메시지 처리를 확인할 수는 없습니다.",
@@ -177,8 +220,11 @@ TOOLS = {
 }
 
 
+SEND_TOOLS = {"send_message", "send_media", "send_emoticon", "send_location"}
+
+
 def scopes_for(name):
-    if name in {"send_message", "get_message_send_status"}:
+    if name in SEND_TOOLS or name == "get_message_send_status":
         return ["kakao.send"]
     if name == "get_pending_messages":
         return ["kakao.read", "kakao.events"]
@@ -193,10 +239,11 @@ def tool_definitions(*, oauth=True):
             "description": description,
             "inputSchema": schema.model_json_schema(),
             "annotations": {
-                "readOnlyHint": name not in {"acknowledge_messages", "send_message"},
-                "destructiveHint": name == "send_message",
+                "readOnlyHint": name not in {"acknowledge_messages", *SEND_TOOLS},
+                "destructiveHint": name in SEND_TOOLS,
                 "idempotentHint": True,
-                "openWorldHint": name == "send_message",
+                "openWorldHint": name
+                in {*SEND_TOOLS, "get_message_image", "get_message_file"},
             },
             "securitySchemes": [
                 {
@@ -228,6 +275,18 @@ def tool_definitions(*, oauth=True):
         }.get(name)
         if result_model:
             definition["outputSchema"] = result_model.model_json_schema()
+        if name == "get_message_attachment":
+            definition["outputSchema"] = {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "integer"},
+                    "message_type": {"type": ["string", "null"]},
+                    "attachment_type": {"type": ["string", "null"]},
+                    "has_attachment": {"type": "boolean"},
+                },
+                "required": ["message_id", "attachment_type", "has_attachment"],
+                "additionalProperties": True,
+            }
         definitions.append(definition)
     return definitions
 
@@ -281,6 +340,7 @@ def create_app(
     worker=True,
     passkeys=None,
     auth=None,
+    webhooks=None,
 ):
     config = config or Config.from_env()
     state = state or State(config.database, config.storage_key)
@@ -295,14 +355,28 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
-        thread = None
+        thread = forwarder_thread = None
+        forwarder = webhooks
         if worker:
             thread = threading.Thread(target=events.run, name="dot-events", daemon=True)
             thread.start()
+            # Owner-configured outbound webhooks; disabled unless targets are configured.
+            if forwarder is None:
+                forwarder = Forwarder.from_env(collector)
+            if forwarder is not None:
+                forwarder_thread = threading.Thread(
+                    target=forwarder.run, name="dot-webhooks", daemon=True
+                )
+                forwarder_thread.start()
+        app.state.webhooks = forwarder
         yield
         events.stop.set()
+        if forwarder is not None:
+            forwarder.stop.set()
         if thread:
             thread.join(timeout=12)
+        if forwarder_thread:
+            forwarder_thread.join(timeout=12)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(BodyLimit, maximum=32768)
@@ -504,11 +578,11 @@ def create_app(
         except ValidationError:
             raise RpcError("invalid_tool_arguments") from None
         args = arguments.model_dump()
-        if name in {"send_message", "get_message_send_status"}:
+        if name in SEND_TOOLS or name == "get_message_send_status":
             try:
                 output = (
-                    collector.outgoing(body=args)
-                    if name == "send_message"
+                    collector.outgoing(body={k: v for k, v in args.items() if v is not None})
+                    if name in SEND_TOOLS
                     else collector.outgoing(request_id=args["request_id"])
                 )
             except QueryError as exc:
@@ -525,6 +599,31 @@ def create_app(
             output = collector.get("/v2/conversations", **args)
         elif name == "get_conversation_context":
             output = collector.get("/v2/context", **args)
+        elif name == "get_message_attachment":
+            try:
+                output = collector.attachment(args["message_id"])
+            except QueryError as exc:
+                raise RpcError(str(exc), -32000) from None
+        elif name in {"get_message_image", "get_message_file"}:
+            try:
+                if name == "get_message_image":
+                    data, headers = collector.image(
+                        args["message_id"], args["variant"], args["index"]
+                    )
+                    summary = image_summary(
+                        args["message_id"], args["variant"], args["index"], headers
+                    )
+                    rendered = image_result(
+                        summary, data, headers.get("x-bridge-mime") or "image/jpeg"
+                    )
+                else:
+                    data, headers = collector.file(args["message_id"])
+                    summary = file_summary(args["message_id"], headers, len(data))
+                    rendered = file_result(summary, data, summary["mime"], args["message_id"])
+            except QueryError as exc:
+                raise RpcError(str(exc), -32000) from None
+            state.put("connection_activity", principal["grant_id"], {"last_tool_at": time.time()})
+            return rendered
         elif name == "get_profile":
             output = {"id": auth.profile, "name": "KakaoTalk Bridge"}
         else:
@@ -570,12 +669,12 @@ def create_app(
         if method == "ping":
             return {}
         if method == "initialize":
-            if auth.transport == "tunnel":
-                version = params.get("protocolVersion")
+            version = params.get("protocolVersion")
+            if auth.transport == "tunnel" or version != PROTOCOL:
                 return {
                     "protocolVersion": version
-                    if version in TUNNEL_PROTOCOLS
-                    else TUNNEL_PROTOCOLS[0],
+                    if version in LEGACY_PROTOCOLS
+                    else LEGACY_PROTOCOLS[0],
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "kakaotalk-bridge", "version": "0.3.2"},
                     "instructions": INSTRUCTIONS,
@@ -637,9 +736,7 @@ def create_app(
             version = request.headers.get(
                 "mcp-protocol-version", meta.get("io.modelcontextprotocol/protocolVersion")
             )
-            allowed_versions = (None, PROTOCOL)
-            if auth.transport == "tunnel":
-                allowed_versions += TUNNEL_PROTOCOLS
+            allowed_versions = (None, PROTOCOL, *LEGACY_PROTOCOLS)
             if version not in allowed_versions:
                 raise RpcError("unsupported_protocol_version", -32022)
             output = await run_in_threadpool(dispatch, msg["method"], params, principal)
@@ -653,9 +750,7 @@ def create_app(
                     }
                 },
             }
-            if auth.transport == "tunnel" and (
-                msg["method"] == "initialize" or version in TUNNEL_PROTOCOLS
-            ):
+            if msg["method"] == "initialize" or version in LEGACY_PROTOCOLS:
                 result["result"] = output
         except RpcError as error:
             result["error"] = {"code": error.code, "message": error.message}
@@ -672,6 +767,7 @@ def create_app(
                     "method": msg["method"]
                     if msg["method"]
                     in (
+                        "initialize",
                         "server/discover",
                         "tools/list",
                         "tools/call",

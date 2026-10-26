@@ -2,16 +2,19 @@ import asyncio
 import hmac
 import sqlite3
 from contextlib import asynccontextmanager, suppress
+from typing import Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
+from server.attachment_service import AttachmentError, Attachments
 from server.config import Settings
+from server.iris_client import IrisClient
 from server.models import Batch, DeviceStatus, Heartbeat, MetadataBatch, Observation
-from server.outgoing import Claim, Outgoing, SendError, SendMessage, SendResult
+from server.outgoing import Claim, Outgoing, OutgoingRequest, SendError, SendResult
 from server.queries import Queries
 from server.store import Conflict, Store
 
@@ -29,7 +32,15 @@ class BodyLimit:
             if message["type"] == "http.disconnect":
                 return
             length += len(message.get("body", b""))
-            if length > self.maximum:
+            limit = self.maximum
+            if (
+                self.maximum >= 1024 * 1024
+                and scope.get("method") == "POST"
+                and scope.get("path") == "/v1/outgoing"
+            ):
+                # Base64 of the 20MiB attachment cap, plus a small JSON envelope.
+                limit = 28 * 1024 * 1024
+            if length > limit:
                 return await JSONResponse({"error": "body_too_large"}, 413)(scope, receive, send)
             chunks.append(message)
             if not message.get("more_body", False):
@@ -78,6 +89,9 @@ def create_app(settings: Settings | None = None):
     )
     app.state.store = store
     app.state.outgoing = outgoing
+    app.state.attachments = Attachments(
+        store, config, IrisClient(config.iris_collector_url, config.ingest_token)
+    )
     app.state.maintenance_failed = False
     app.add_middleware(BodyLimit)
 
@@ -101,9 +115,27 @@ def create_app(settings: Settings | None = None):
     async def send_error(request, exc):
         return JSONResponse({"error": exc.reason}, exc.code)
 
+    @app.exception_handler(AttachmentError)
+    async def attachment_error(request, exc):
+        return JSONResponse({"error": exc.reason}, exc.status)
+
     @app.post("/v1/outgoing", dependencies=[Depends(send_auth)])
-    def send_message(body: SendMessage):
+    def send_message(body: OutgoingRequest):
         return outgoing.enqueue(body)
+
+    @app.get(
+        "/internal/v1/outgoing/{request_id}/files/{ordinal}",
+        dependencies=[Depends(ingest_auth)],
+    )
+    def outgoing_file(request_id: UUID, ordinal: int):
+        if not 0 <= ordinal <= 9:
+            raise HTTPException(404, "send_request_not_found")
+        data = outgoing.blob(str(request_id), ordinal)
+        return Response(
+            content=data,
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
     @app.get("/v1/outgoing/{request_id}", dependencies=[Depends(send_auth)])
     def send_status(request_id: UUID):
@@ -175,6 +207,12 @@ def create_app(settings: Settings | None = None):
                 check_device(event.device_id)
                 collecting(event.enrollment_epoch, event.database_ref.database_id, bridge)
                 result = store.ingest(event)
+                if (
+                    result == "committed"
+                    and event.kind == "db_row"
+                    and event.database_ref.is_mine
+                ):
+                    outgoing.confirm_all()
                 results.append({"index": index, "event_id": str(event.event_id), "status": result})
             except ValidationError:
                 results.append({"index": index, "status": "rejected", "reason": "invalid_event"})
@@ -298,5 +336,25 @@ def create_app(settings: Settings | None = None):
         after: int = Query(5, ge=0, le=30),
     ):
         return query_result(queries.context, message_id=message_id, before=before, after=after)
+
+    attachments = app.state.attachments
+
+    @app.get("/v2/attachments", dependencies=[Depends(read_auth)])
+    def attachment_view(message_id: int = Query(ge=1)):
+        return attachments.view(message_id)
+
+    @app.get("/v2/attachments/image", dependencies=[Depends(read_auth)])
+    def attachment_image(
+        message_id: int = Query(ge=1),
+        variant: Literal["thumbnail", "original"] = "thumbnail",
+        index: int = Query(0, ge=0, le=29),
+    ):
+        result = attachments.image(message_id, variant, index)
+        return Response(result["data"], media_type=result["mime"], headers=result["headers"])
+
+    @app.get("/v2/attachments/file", dependencies=[Depends(read_auth)])
+    def attachment_file(message_id: int = Query(ge=1)):
+        result = attachments.file(message_id)
+        return Response(result["data"], media_type=result["mime"], headers=result["headers"])
 
     return app

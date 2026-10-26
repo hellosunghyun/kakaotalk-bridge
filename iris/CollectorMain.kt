@@ -28,7 +28,7 @@ object CollectorMain {
     private const val DB = "$KAKAO/databases/KakaoTalk.db"
     private const val PROFILE_DB = "$KAKAO/databases/KakaoTalk2.db"
     private const val ACCOUNT = "$KAKAO/files/datastore/LocalUser_DataStore.pref.preferences_pb"
-    private const val BUILD = "iris-ee1dc978-collector-v6"
+    private const val BUILD = "iris-ee1dc978-collector-v8"
     private const val PAGE_ROWS = 200
     private const val PAGE_CHARS = 2 * 1024 * 1024
     private val readOnlyErrorHandler = android.database.DatabaseErrorHandler { throw IllegalStateException("source_database_unavailable") }
@@ -139,6 +139,24 @@ object CollectorMain {
         return sent to (if (sent != null) "sent_message" else "unavailable")
     }
 
+    /** One attachment column, decrypted with the same key as the message body. */
+    private fun decodeAttachment(cursor: Cursor): JSONObject {
+        val metadata = try { JSONObject(cursor.getString(4) ?: throw Unreadable("metadata_unreadable")) }
+            catch (_: JSONException) { throw Unreadable("metadata_unreadable") }
+        val ciphertext = cursor.getString(3) ?: ""
+        val placeholder = ciphertext.isEmpty() || ciphertext == "{}" || ciphertext == "[]"
+        val enc = metadata.optInt("enc", -1)
+        if (!placeholder && enc < 0) throw Unreadable("metadata_unreadable")
+        val plain = if (placeholder) ciphertext else
+            try { KakaoDecrypt.decrypt(enc, ciphertext, cursor.getLong(2)) }
+            catch (_: Exception) { throw Unreadable("decrypt_failed") }
+        if (!placeholder && plain == ciphertext) throw Unreadable("decrypt_failed")
+        if (plain.length > 65536) throw Unreadable("attachment_too_large")
+        return JSONObject()
+            .put("message_type", cursor.getString(1) ?: "")
+            .put("attachment", if (plain.isEmpty()) JSONObject.NULL else plain)
+    }
+
     private fun row(cursor: Cursor): JSONObject {
         val metadata = try { JSONObject(cursor.getString(6) ?: throw Unreadable("metadata_unreadable")) }
             catch (_: JSONException) { throw Unreadable("metadata_unreadable") }
@@ -243,25 +261,61 @@ object CollectorMain {
                             val stat = Os.stat(DB)
                             require(body.getString("database_id") == "${stat.st_dev}:${stat.st_ino}")
                             val chat = body.getString("chat_id").toLong()
+                            var high = 0L
                             SQLiteDatabase.openDatabase(DB,null,SQLiteDatabase.OPEN_READONLY,readOnlyErrorHandler).use { db ->
                                 db.rawQuery("SELECT id FROM chat_rooms WHERE id=?",arrayOf(chat.toString())).use {
                                     require(it.moveToFirst())
                                 }
+                                high = db.rawQuery("SELECT COALESCE(MAX(_id),0) FROM chat_logs", null).use {
+                                    it.moveToFirst(); it.getLong(0)
+                                }
                             }
-                            val intent = CollectorSender.prepare(chat, body.getString("text"))
-                            require(approved().toString() == result.toString())
-                            attempted = true
-                            CollectorSender.submit(intent)
+                            val attachments = body.optJSONArray("attachments")
+                            if (attachments != null && attachments.length() > 0) {
+                                require(attachments.length() <= 10)
+                                require(!body.has("text") || body.isNull("text"))
+                                val files = mutableListOf<Pair<File, String>>()
+                                for (i in 0 until attachments.length()) {
+                                    val item = attachments.getJSONObject(i)
+                                    val kind = item.getString("kind")
+                                    files.add(CollectorSender.stagedFile(item.getString("name"), kind) to kind)
+                                }
+                                require(approved().toString() == result.toString())
+                                CollectorSender.ensureAwake()
+                                val intent = CollectorSender.prepareMedia(chat, files)
+                                // Resolve the binder method before any IPC: a lookup failure is `failed`.
+                                val starter = CollectorSender.activityStarter()
+                                attempted = true
+                                val code = starter.start(intent)
+                                if (code < 0) {
+                                    attempted = false
+                                    throw IllegalStateException("kakao_activity_rejected")
+                                }
+                            } else {
+                                val thread = if (body.has("thread_id") && !body.isNull("thread_id"))
+                                    body.getString("thread_id").toLong() else null
+                                val intent = CollectorSender.prepare(chat, body.getString("text"), thread)
+                                require(approved().toString() == result.toString())
+                                attempted = true
+                                CollectorSender.submit(intent)
+                            }
                             require(approved().toString() == result.toString())
                             JSONObject().put("build",BUILD).put("status","submitted")
                                 .put("enrollment_epoch",epoch).put("database_id",body.getString("database_id"))
-                                .put("request_id",requestId).toString()
+                                .put("request_id",requestId).put("high_water", high.toString()).toString()
                         }
                         call.respondText(response,ContentType.Application.Json)
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
                         // An exception after IPC may still have sent. Never claim a safe retry.
-                        call.respondText(JSONObject().put("status",if (attempted) "unknown" else "failed")
-                            .toString(),ContentType.Application.Json)
+                        // Only a fixed reason code is returned; exception text can contain a path.
+                        val known = setOf(
+                            "screen_locked", "screen_state_unreadable", "kakao_activity_rejected",
+                            "kakao_activity_unavailable"
+                        )
+                        val reason = if (!attempted && error.message in known) error.message else null
+                        val payload = JSONObject().put("status", if (attempted) "unknown" else "failed")
+                        if (reason != null) payload.put("reason", reason)
+                        call.respondText(payload.toString(), ContentType.Application.Json)
                     }
                 }
                 get("/collector/health") {
@@ -316,6 +370,57 @@ object CollectorMain {
                             .put("items",rows).toString(),ContentType.Application.Json)
                     } catch (_: Exception) {
                         call.respondText("{\"error\":\"metadata_unavailable\"}",ContentType.Application.Json,HttpStatusCode.ServiceUnavailable)
+                    }
+                }
+                get("/collector/attachment") {
+                    val epoch = authorize(call) ?: return@get
+                    try {
+                        synchronized(CollectorMain) {
+                            val config = approved()
+                            require(config.getString("enrollment_epoch") == epoch)
+                            val logId = call.request.queryParameters["log_id"] ?: throw Unreadable("not_found")
+                            require(Regex("[1-9][0-9]{0,18}").matches(logId))
+                            val stat = Os.stat(DB)
+                            val decoded = SQLiteDatabase.openDatabase(
+                                DB, null, SQLiteDatabase.OPEN_READONLY, readOnlyErrorHandler
+                            ).use { db ->
+                                db.rawQuery(
+                                    "SELECT _id,type,user_id,attachment,v FROM chat_logs WHERE _id=? LIMIT 1",
+                                    arrayOf(logId)
+                                ).use { cursor ->
+                                    if (!cursor.moveToFirst()) throw Unreadable("not_found")
+                                    decodeAttachment(cursor)
+                                }
+                            }
+                            require(approved().toString() == config.toString())
+                            JSONObject().put("build", BUILD)
+                                .put("enrollment_epoch", config.getString("enrollment_epoch"))
+                                .put("database_id", "${stat.st_dev}:${stat.st_ino}")
+                                .put("log_id", logId)
+                                .put("message_type", decoded.getString("message_type"))
+                                .put("attachment", decoded.get("attachment"))
+                                .toString()
+                        }.let { call.respondText(it, ContentType.Application.Json) }
+                    } catch (error: Unreadable) {
+                        val known = setOf("not_found", "decrypt_failed", "metadata_unreadable", "attachment_too_large")
+                        val reason = if (error.reason in known) error.reason else "attachment_unavailable"
+                        val status = when (reason) {
+                            "not_found" -> HttpStatusCode.NotFound
+                            "decrypt_failed", "metadata_unreadable" -> HttpStatusCode.Conflict
+                            "attachment_too_large" -> HttpStatusCode.PayloadTooLarge
+                            else -> HttpStatusCode.ServiceUnavailable
+                        }
+                        call.respondText(
+                            JSONObject().put("error", reason).toString(),
+                            ContentType.Application.Json,
+                            status
+                        )
+                    } catch (_: Exception) {
+                        call.respondText(
+                            "{\"error\":\"attachment_unavailable\"}",
+                            ContentType.Application.Json,
+                            HttpStatusCode.ServiceUnavailable
+                        )
                     }
                 }
                 get("/collector/rows") {

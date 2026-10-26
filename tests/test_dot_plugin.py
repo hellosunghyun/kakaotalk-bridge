@@ -236,11 +236,11 @@ def test_discovery_401_oauth_metadata_and_complete_results(plugin):
     assert discovery["supportedVersions"] == ["2026-07-28"]
     assert discovery["capabilities"]["events"] == {}
     tools = rpc(client, "tools/list")["result"]["tools"]
-    assert len(tools) == 10
+    assert len(tools) == 16
     assert next(t for t in tools if t["name"] == "send_message")["annotations"]["openWorldHint"]
     assert next(t for t in tools if t["name"] == "get_profile")["_meta"]["openai/profile"] is True
     assert rpc(client, "events/list")["result"]["events"][0]["name"] == EVENT
-    assert "error" in rpc(client, "initialize")
+    assert rpc(client, "initialize", {"protocolVersion": "2026-07-28"})["error"]["code"] == -32022
     assert "error" in call(client, "get_recent_messages", limit=True)
     assert "error" in call(client, "get_recent_messages", arbitrary_command="private")
 
@@ -664,3 +664,82 @@ def test_send_oauth_scope_annotations_and_argument_validation(plugin, monkeypatc
         == "insufficient_scope"
     )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "redirect",
+    [
+        "http://localhost:3334/oauth/callback",
+        "http://127.0.0.1:3334/oauth/callback",
+        "http://[::1]:3334/oauth/callback",
+        "http://localhost/oauth/callback",
+    ],
+)
+def test_dcr_accepts_native_loopback_redirects(plugin, redirect):
+    client, *_ = plugin
+    assert client.post("/register", json={"redirect_uris": [redirect]}).status_code == 201
+
+
+@pytest.mark.parametrize(
+    "redirect",
+    [
+        "http://example.com/cb",
+        "http://localhost.evil.example/cb",
+        "http://user@localhost:3334/cb",
+        "http://localhost:3334/cb#frag",
+        "http://10.0.0.1:3334/cb",
+    ],
+)
+def test_dcr_rejects_non_loopback_http_redirects(plugin, redirect):
+    client, *_ = plugin
+    assert client.post("/register", json={"redirect_uris": [redirect]}).status_code == 400
+
+
+def test_loopback_redirect_port_may_vary_at_authorize():
+    from dot_plugin.auth import redirect_allowed, redirect_origin
+
+    registered = ["http://localhost:3334/oauth/callback"]
+    assert redirect_allowed("http://localhost:51234/oauth/callback", registered)
+    assert redirect_allowed("http://localhost/oauth/callback", registered)
+    assert not redirect_allowed("http://localhost:3334/other", registered)
+    assert not redirect_allowed("http://127.0.0.1:3334/oauth/callback", registered)
+    assert not redirect_allowed("https://chatgpt.com/x", registered)
+    assert not redirect_allowed(
+        "https://ok.example:8443/cb", ["https://ok.example/cb"]
+    )
+    assert redirect_origin("http://localhost:3334/oauth/callback") == "http://localhost:3334"
+    assert redirect_origin("http://[::1]:3334/cb") == "http://[::1]:3334"
+
+
+@pytest.mark.parametrize("version", ["2025-06-18", "2025-03-26", "2024-11-05"])
+def test_public_oauth_accepts_legacy_initialize_handshake(plugin, version):
+    client, *_ = plugin
+    initialized = rpc(client, "initialize", {"protocolVersion": version})["result"]
+    assert initialized["protocolVersion"] == version
+    assert initialized["capabilities"] == {"tools": {}}
+    assert initialized["serverInfo"]["name"] == "kakaotalk-bridge"
+    assert "resultType" not in initialized
+    assert (
+        client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code
+        == 202
+    )
+    client.headers["MCP-Protocol-Version"] = version
+    try:
+        listed = rpc(client, "tools/list")["result"]
+        assert len(listed["tools"]) == 16 and "resultType" not in listed
+        assert rpc(client, "ping")["result"] == {}
+        profile = call(client, "get_profile")["result"]
+        assert not profile["isError"] and profile["structuredContent"]["id"]
+    finally:
+        del client.headers["MCP-Protocol-Version"]
+    # Unknown legacy versions negotiate down; the 2026 flow is unchanged.
+    assert rpc(client, "initialize", {"protocolVersion": "2024-01-01"})["result"][
+        "protocolVersion"
+    ] == "2025-11-25"
+    assert rpc(client, "server/discover")["result"]["supportedVersions"] == ["2026-07-28"]
+    assert rpc(client, "tools/list")["result"]["resultType"] == "complete"
+    client.headers["MCP-Protocol-Version"] = "1999-01-01"
+    try:
+        assert rpc(client, "tools/list")["error"]["code"] == -32022
+    finally:
+        del client.headers["MCP-Protocol-Version"]

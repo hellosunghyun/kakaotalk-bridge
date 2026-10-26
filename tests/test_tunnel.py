@@ -174,7 +174,7 @@ def test_oauth_still_works_and_all_tools_are_shared(bridge):
     )
     actual = rpc(private, "tools/list")["result"]["tools"]
     expected = tool_definitions()
-    assert len(actual) == 10
+    assert len(actual) == 16
     for a, e in zip(actual, expected, strict=True):
         assert a.pop("securitySchemes") == [{"type": "noauth"}]
         assert e.pop("securitySchemes")[0]["type"] == "oauth2"
@@ -419,7 +419,7 @@ def test_sidecar_probe_before_approval_and_tool_calls_on_every_protocol(bridge, 
     assert initialized["protocolVersion"] == version
     assert initialized["capabilities"] == {"tools": {}}
     assert "resultType" not in initialized
-    assert len(rpc(private, "tools/list")["result"]["tools"]) == 10
+    assert len(rpc(private, "tools/list")["result"]["tools"]) == 16
     assert private.get("/mcp").status_code == 405
     for method in ("tools/call", "events/list", "events/subscribe"):
         response = private.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method})
@@ -437,12 +437,16 @@ def test_sidecar_probe_before_approval_and_tool_calls_on_every_protocol(bridge, 
         private.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}).status_code
         == 401
     )
-    # The public protocol contract is unchanged.
+    # Public OAuth clients get the same legacy handshake; 2026-07-28 initialize still
+    # points to server/discover.
     _, form = link(public)
     public.headers["Authorization"] = (
         "Bearer " + public.post("/token", data=form).json()["access_token"]
     )
-    assert rpc(public, "initialize", {"protocolVersion": version})["error"]["code"] == -32022
+    assert rpc(public, "initialize", {"protocolVersion": version})["result"][
+        "protocolVersion"
+    ] == version
+    assert rpc(public, "initialize", {"protocolVersion": "2026-07-28"})["error"]["code"] == -32022
 
 
 def test_official_python_mcp_client_can_initialize_list_and_call(bridge):
@@ -468,7 +472,7 @@ def test_official_python_mcp_client_can_initialize_list_and_call(bridge):
         ):
             result = await session.initialize()
             assert result.serverInfo.name == "kakaotalk-bridge"
-            assert len((await session.list_tools()).tools) == 10
+            assert len((await session.list_tools()).tools) == 16
             approve(control)
             result = await session.call_tool("get_profile", {})
             assert not result.isError
@@ -526,3 +530,31 @@ def test_revoked_send_permission_is_not_restored_by_basic_approval(bridge):
     approve(control)
     grant = state.get("grant", state.get("settings", "tunnel_grant"))
     assert grant["scope"] == "kakao.read kakao.events"
+
+
+def test_official_python_mcp_client_over_public_oauth(bridge):
+    import anyio
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    _, public, *_ = bridge
+    _, form = link(public)
+    token = public.post("/token", data=form).json()["access_token"]
+
+    async def connect():
+        async with (
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=public.app),
+                headers={"Authorization": "Bearer " + token},
+            ) as http,
+            streamable_http_client("http://public/mcp", http_client=http) as (read, write, _),
+            ClientSession(read, write) as session,
+        ):
+            result = await session.initialize()
+            assert result.serverInfo.name == "kakaotalk-bridge"
+            assert len((await session.list_tools()).tools) == 16
+            result = await session.call_tool("get_profile", {})
+            assert not result.isError
+
+    anyio.run(connect)
