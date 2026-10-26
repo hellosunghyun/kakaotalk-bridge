@@ -283,8 +283,10 @@ object CollectorMain {
                                 require(approved().toString() == result.toString())
                                 CollectorSender.ensureAwake()
                                 val intent = CollectorSender.prepareMedia(chat, files)
+                                // Resolve the binder method before any IPC: a lookup failure is `failed`.
+                                val starter = CollectorSender.activityStarter()
                                 attempted = true
-                                val code = CollectorSender.submitActivity(intent)
+                                val code = starter.start(intent)
                                 if (code < 0) {
                                     attempted = false
                                     throw IllegalStateException("kakao_activity_rejected")
@@ -307,7 +309,8 @@ object CollectorMain {
                         // An exception after IPC may still have sent. Never claim a safe retry.
                         // Only a fixed reason code is returned; exception text can contain a path.
                         val known = setOf(
-                            "screen_locked", "screen_state_unreadable", "kakao_activity_rejected"
+                            "screen_locked", "screen_state_unreadable", "kakao_activity_rejected",
+                            "kakao_activity_unavailable"
                         )
                         val reason = if (!attempted && error.message in known) error.message else null
                         val payload = JSONObject().put("status", if (attempted) "unknown" else "failed")

@@ -606,6 +606,7 @@ _FAIL_REASONS = {
     "ui_action_failed",
     "media_stage_failed",
     "kakao_activity_rejected",
+    "kakao_activity_unavailable",
     "keyboard_unavailable",
 }
 

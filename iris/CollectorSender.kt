@@ -124,33 +124,85 @@ object CollectorSender {
         require(component?.packageName == "com.kakao.talk" && component.className == SERVICE)
     }
 
-    /** Android 14 IActivityManager.startActivity. Returns the framework result code. */
-    fun submitActivity(intent: Intent): Int {
+    /**
+     * A resolved activity-start binder call. Resolved before any IPC so a missing
+     * method is a clean `failed` (`kakao_activity_unavailable`), never `unknown`.
+     */
+    class ActivityStarter internal constructor(
+        private val target: Any,
+        private val method: java.lang.reflect.Method,
+        private val feature: Boolean,
+        private val user: Boolean,
+    ) {
+        val signature: String get() = "${method.declaringClass.simpleName}.${method.name}/${method.parameterTypes.size}"
+
+        /** Returns the framework result code (negative = rejected). */
+        fun start(intent: Intent): Int {
+            val args = ArrayList<Any?>(12)
+            args.add(null)                       // IApplicationThread caller
+            args.add("com.android.shell")        // callingPackage
+            if (feature) args.add(null)          // callingFeatureId
+            args.addAll(listOf(intent, intent.type, null, null, 0, 0, null, null))
+            if (user) args.add(0)                // userId (USER_SYSTEM)
+            val code = try {
+                method.invoke(target, *args.toTypedArray())
+            } catch (error: java.lang.reflect.InvocationTargetException) {
+                throw error.targetException ?: error
+            }
+            return (code as? Int) ?: throw IllegalStateException("kakao_activity_rejected")
+        }
+    }
+
+    /**
+     * Android 14 (redroid) exposes no 12-argument `IActivityManager.startActivity`;
+     * the 12-argument form is `startActivityAsUser(..., int userId)`. Signatures vary by
+     * release, so match by name and parameter shape on IActivityManager, then
+     * IActivityTaskManager.
+     */
+    fun activityStarter(): ActivityStarter {
         val thread = Class.forName("android.app.IApplicationThread")
+        val profiler = Class.forName("android.app.ProfilerInfo")
+        val int = Int::class.javaPrimitiveType
+        val tail = listOf(Intent::class.java, String::class.java, IBinder::class.java,
+            String::class.java, int, int, profiler, Bundle::class.java)
+        fun shape(feature: Boolean, user: Boolean): List<Class<*>?> {
+            val head = mutableListOf<Class<*>?>(thread, String::class.java)
+            if (feature) head.add(String::class.java)
+            head.addAll(tail)
+            if (user) head.add(int)
+            return head
+        }
+        val services = listOf(
+            "activity" to "android.app.IActivityManager",
+            "activity_task" to "android.app.IActivityTaskManager",
+        )
+        val names = listOf(
+            "startActivityAsUserWithFeature" to true, "startActivityAsUser" to true,
+            "startActivityWithFeature" to false, "startActivity" to false,
+        )
+        for ((name, user) in names) {
+            for ((service, iface) in services) {
+                val target = runCatching { binderInterface(service, iface) }.getOrNull() ?: continue
+                val type = Class.forName(iface)
+                for (feature in listOf(true, false)) {
+                    val wanted = shape(feature, user)
+                    val method = type.methods.firstOrNull {
+                        it.name == name && it.parameterTypes.toList() == wanted
+                    } ?: continue
+                    return ActivityStarter(target, method, feature, user)
+                }
+            }
+        }
+        throw IllegalStateException("kakao_activity_unavailable")
+    }
+
+    private fun binderInterface(service: String, iface: String): Any {
         val binder = Class.forName("android.os.ServiceManager")
-            .getMethod("getService", String::class.java).invoke(null, "activity")
-        val manager = Class.forName("android.app.IActivityManager\$Stub")
+            .getMethod("getService", String::class.java).invoke(null, service)
+            ?: throw IllegalStateException("kakao_activity_unavailable")
+        return Class.forName("$iface\$Stub")
             .getMethod("asInterface", IBinder::class.java).invoke(null, binder)
-        val method = Class.forName("android.app.IActivityManager").getMethod(
-            "startActivity",
-            thread,
-            String::class.java,
-            String::class.java,
-            Intent::class.java,
-            String::class.java,
-            IBinder::class.java,
-            String::class.java,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Class.forName("android.app.ProfilerInfo"),
-            Bundle::class.java,
-            Int::class.javaPrimitiveType
-        )
-        val code = method.invoke(
-            manager, null, "com.android.shell", null, intent, intent.type,
-            null, null, 0, 0, null, null, 0
-        )
-        return (code as? Int) ?: throw IllegalStateException("kakao_activity_rejected")
+            ?: throw IllegalStateException("kakao_activity_unavailable")
     }
 
     private fun exec(vararg args: String): String {
