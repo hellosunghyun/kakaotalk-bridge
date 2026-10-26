@@ -46,7 +46,10 @@ Subscription webhooks have no protocol replay; the durable pending-message tools
 """
 
 # tunnel-client v0.0.15 probes with older MCP protocol versions at startup.
+# Public OAuth clients that predate 2026-07-28 (e.g. mcp-remote) use the same legacy
+# initialize handshake; server/discover remains the 2026-07-28 path.
 TUNNEL_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+LEGACY_PROTOCOLS = TUNNEL_PROTOCOLS
 TUNNEL_DISCOVERY = {
     "initialize",
     "notifications/initialized",
@@ -586,12 +589,12 @@ def create_app(
         if method == "ping":
             return {}
         if method == "initialize":
-            if auth.transport == "tunnel":
-                version = params.get("protocolVersion")
+            version = params.get("protocolVersion")
+            if auth.transport == "tunnel" or version != PROTOCOL:
                 return {
                     "protocolVersion": version
-                    if version in TUNNEL_PROTOCOLS
-                    else TUNNEL_PROTOCOLS[0],
+                    if version in LEGACY_PROTOCOLS
+                    else LEGACY_PROTOCOLS[0],
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "kakaotalk-bridge", "version": "0.3.2"},
                     "instructions": INSTRUCTIONS,
@@ -653,9 +656,7 @@ def create_app(
             version = request.headers.get(
                 "mcp-protocol-version", meta.get("io.modelcontextprotocol/protocolVersion")
             )
-            allowed_versions = (None, PROTOCOL)
-            if auth.transport == "tunnel":
-                allowed_versions += TUNNEL_PROTOCOLS
+            allowed_versions = (None, PROTOCOL, *LEGACY_PROTOCOLS)
             if version not in allowed_versions:
                 raise RpcError("unsupported_protocol_version", -32022)
             output = await run_in_threadpool(dispatch, msg["method"], params, principal)
@@ -669,9 +670,7 @@ def create_app(
                     }
                 },
             }
-            if auth.transport == "tunnel" and (
-                msg["method"] == "initialize" or version in TUNNEL_PROTOCOLS
-            ):
+            if msg["method"] == "initialize" or version in LEGACY_PROTOCOLS:
                 result["result"] = output
         except RpcError as error:
             result["error"] = {"code": error.code, "message": error.message}
@@ -688,6 +687,7 @@ def create_app(
                     "method": msg["method"]
                     if msg["method"]
                     in (
+                        "initialize",
                         "server/discover",
                         "tools/list",
                         "tools/call",

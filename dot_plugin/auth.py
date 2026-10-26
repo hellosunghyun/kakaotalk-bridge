@@ -30,13 +30,55 @@ class AuthError(Exception):
         self.reason, self.status = reason, status
 
 
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def is_loopback_redirect(uri):
+    """RFC 8252 7.3 native-app loopback redirect: http://localhost|127.0.0.1|[::1][:port]/..."""
+    try:
+        if not isinstance(uri, str) or any(ord(c) <= 32 or ord(c) == 127 for c in uri):
+            return False
+        u = urlsplit(uri)
+        u.port  # raises ValueError on a malformed port
+        return (
+            u.scheme == "http"
+            and u.hostname in LOOPBACK_HOSTS
+            and not (u.username or u.password or u.fragment)
+        )
+    except ValueError:
+        return False
+
+
+def redirect_allowed(uri, registered):
+    """Exact match, except loopback redirects may vary only by port (RFC 8252 7.3)."""
+    if not isinstance(uri, str):
+        return False
+    if uri in registered:
+        return True
+    if not is_loopback_redirect(uri):
+        return False
+    u = urlsplit(uri)
+    for raw in registered:
+        if is_loopback_redirect(raw):
+            r = urlsplit(raw)
+            if (r.hostname, r.path, r.query) == (u.hostname, u.path, u.query):
+                return True
+    return False
+
+
 def redirect_origin(uri):
     """Build an injection-safe CSP source for an already approved redirect URI."""
     try:
         if not isinstance(uri, str) or any(ord(c) <= 32 or ord(c) == 127 for c in uri):
             raise ValueError
         u = urlsplit(uri)
-        if u.scheme != "https" or not u.hostname or u.username or u.password or u.fragment:
+        if not u.hostname or u.username or u.password or u.fragment:
+            raise ValueError
+        if u.scheme == "http" and is_loopback_redirect(uri):
+            # RFC 8252 7.3: native apps may use an http loopback redirect on any port.
+            host = "[::1]" if u.hostname == "::1" else u.hostname
+            return "http://" + host + (f":{u.port}" if u.port else "")
+        if u.scheme != "https":
             raise ValueError
         host = u.hostname.encode("idna").decode()
         if ":" in host:
@@ -253,7 +295,7 @@ class OAuth:
                 raise AuthError("passkey_not_configured", 503)
         client = self.client(query.get("client_id"))
         if (
-            query.get("redirect_uri") not in client["redirect_uris"]
+            not redirect_allowed(query.get("redirect_uri"), client["redirect_uris"])
             or query.get("response_type") != "code"
         ):
             raise AuthError()
