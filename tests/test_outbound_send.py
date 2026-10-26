@@ -404,6 +404,8 @@ def test_quote_driver_uses_separate_argv_and_deletes_dumps(tmp_path, monkeypatch
             return "mDreamingLockscreen=false"
         if args[:3] == ("shell", "dumpsys", "power"):
             return "Display Power: state=ON"
+        if args[:4] == ("shell", "dumpsys", "activity", "activities"):
+            return "  topResumedActivity=ActivityRecord{1 u0 com.kakao.talk/.activity.chatroom.ChatRoomActivity t9}"
         if args[:3] == ("shell", "settings", "get"):
             return "com.android.inputmethod.latin/.LatinIME"
         if args[1] == "uiautomator":
@@ -680,3 +682,45 @@ def test_failed_media_send_deletes_staged_files_now():
     calls.clear()
     release_after_send(lambda *args, **kw: calls.append(args), ["kb-0-a.mp4"], True)
     assert calls == []
+
+
+def test_a_leftover_composer_is_not_taken_as_the_target_room(tmp_path, monkeypatch):
+    # Tablet split view: the last room's composer stays visible while the main activity is
+    # on top, so the driver must still open the room by id.
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    calls = []
+    pages = [_emoticon_grid()]
+    adb = _scripted_adb(pages, calls)
+    driver = UiDriver(adb, lambda _text: None, sleep=lambda _s: None)
+    driver.deadline = float("inf")
+    driver._open_room(CHAT)
+    assert any(call[-1] == f"kakaotalk://chatroom/{CHAT}" for call in calls)
+
+
+def test_room_open_acknowledges_a_plain_kakaotalk_alert(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    alert = hierarchy(
+        _xml(**{"resource-id": "com.kakao.talk:id/txt_message", "text": "지원하지 않는 파일 형식입니다.", "bounds": "[351,863][849,921]"}),
+        _xml(text="확인", bounds="[780,930][873,1002]"),
+    )
+    calls = []
+    pages = [hierarchy(), alert, hierarchy(ROOM)]
+    driver = UiDriver(_scripted_adb(pages, calls), lambda _text: None, sleep=lambda _s: None)
+    driver.deadline = float("inf")
+    driver._open_room(CHAT)
+    assert ("shell", "input", "tap", "826", "966") in calls
+    out = capsys.readouterr().out
+    assert "kakao_alert_dismissed" in out and "지원하지" not in out
+
+
+def test_room_open_leaves_a_two_button_dialog_alone():
+    from device.ui_driver import _plain_alert_ok
+
+    nodes = [
+        {"rid": "com.kakao.talk:id/txt_message", "text": "나가시겠습니까?", "desc": "", "x": 1, "y": 1, "bottom": 2},
+        {"rid": "", "text": "취소", "desc": "", "x": 1, "y": 1, "bottom": 2},
+        {"rid": "", "text": "확인", "desc": "", "x": 2, "y": 1, "bottom": 2},
+    ]
+    assert _plain_alert_ok(nodes) is None

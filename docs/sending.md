@@ -82,7 +82,7 @@ am start -n com.kakao.talk/com.kakao.talk.activity.chatroom.ChatRoomActivity \
   --el key_id <chat_id> --el chatId <chat_id> --el chatRoomId <chat_id>
 ```
 
-덤프에 입력창(`message_edit_text` 또는 `send_button_layout`)이 없으면 숫자만 허용하는 `kakaotalk://chatroom/<chat_id>`를 한 번 더 엽니다. 방 ID는 셸 문자열이 아니라 인자로 넘깁니다. 동작이 성공하든 실패하든 카카오톡 메인(26.9.1에서는 `AdaptiveMainActivity`)으로 돌아가고, 바꾸기 전 키보드가 `패키지/클래스` 형식이면 그 키보드로 되돌립니다. UI 덤프는 메시지 본문이 들어 있으므로 메모리에서만 읽고 `/data/local/tmp/kb-ui-dump.xml`과 `/sdcard/window_dump.xml`을 바로 지웁니다. 호스트에 덤프를 저장하지 않습니다.
+태블릿 분할 화면은 마지막 방의 입력창을 계속 보여 주므로 입력창만으로는 어느 방인지 알 수 없습니다. 그래서 명시 실행은 `topResumedActivity`가 `ChatRoomActivity`일 때만 인정합니다(26.9.1에는 이 액티비티가 없고 `am start`도 0으로 끝나므로 항상 아래 딥링크로 갑니다). 딥링크를 기다리는 동안 버튼이 `확인` 하나뿐인 카카오톡 알림(`txt_message`, 예: 지원하지 않는 파일 형식)은 눌러 닫고 `kakao_alert_dismissed` 단계를 남깁니다. 버튼이 둘 이상인 대화상자는 건드리지 않습니다. 그 밖에 덤프에 입력창(`message_edit_text` 또는 `send_button_layout`)이 없으면 숫자만 허용하는 `kakaotalk://chatroom/<chat_id>`를 한 번 더 엽니다. 방 ID는 셸 문자열이 아니라 인자로 넘깁니다. 동작이 성공하든 실패하든 카카오톡 메인(26.9.1에서는 `AdaptiveMainActivity`)으로 돌아가고, 바꾸기 전 키보드가 `패키지/클래스` 형식이면 그 키보드로 되돌립니다. UI 덤프는 메시지 본문이 들어 있으므로 메모리에서만 읽고 `/data/local/tmp/kb-ui-dump.xml`과 `/sdcard/window_dump.xml`을 바로 지웁니다. 호스트에 덤프를 저장하지 않습니다.
 
 **방을 열면 그 방이 읽음 처리됩니다.** 전체 동작의 제한 시간은 약 45초이고, 그동안 수집 폴링은 그 작업자 턴에서 기다립니다. 각 단계는 `{"ui_step": ..., "kind": ..., "ok": ..., "elapsed_ms": ...}` 한 줄로 iris-collector 로그에 남습니다. 화면 글자는 남기지 않습니다. 시간 초과면 마지막 줄의 `ui_step`이 멈춘 단계입니다.
 

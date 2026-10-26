@@ -180,7 +180,11 @@ class UiDriver:
             chat_id,
         )
         self.sleep(0.3)
-        if _composer(_nodes(self._dump())):
+        # The tablet layout keeps the last room's composer on screen, so a composer alone
+        # does not prove which room is open. Accept the explicit start only when the room
+        # activity is really on top; KakaoTalk 26.9.1 has no ChatRoomActivity and `am start`
+        # still exits 0 there, so it always falls through to the id-addressed deeplink.
+        if self._room_activity_on_top() and _composer(_nodes(self._dump())):
             self._log("room_open_explicit")
             return
         self.adb(
@@ -192,7 +196,25 @@ class UiDriver:
             "-d",
             f"kakaotalk://chatroom/{chat_id}",
         )
-        self._wait(lambda nodes: _composer(nodes), "room_open_deeplink")
+        self.sleep(0.8)
+        self._wait(self._composer_or_dismiss_alert, "room_open_deeplink")
+
+    def _room_activity_on_top(self):
+        top = self.adb("shell", "dumpsys", "activity", "activities", check=False) or ""
+        line = next((row for row in top.splitlines() if "topResumedActivity" in row), "")
+        return ROOM_ACTIVITY.split("/", 1)[1].rsplit(".", 1)[1] in line
+
+    def _composer_or_dismiss_alert(self, nodes):
+        """A KakaoTalk alert (for example after an unsupported share) covers the room.
+        Acknowledge a plain one-button alert so the room can show; never anything else."""
+        found = _composer(nodes)
+        if found:
+            return found
+        alert = _plain_alert_ok(nodes)
+        if alert:
+            self._log("kakao_alert_dismissed")
+            self._tap(alert)
+        return None
 
     def _quote(self, item):
         preview = (item.get("reply_preview") or "").strip()
@@ -383,6 +405,15 @@ def _map_search_or_dialog(nodes):
 
 def _place_send(nodes):
     return _first(nodes, lambda n: n["text"] == "이 장소 보내기")
+
+
+def _plain_alert_ok(nodes):
+    if not any(n["rid"] == "com.kakao.talk:id/txt_message" for n in nodes):
+        return None
+    buttons = [n for n in nodes if n["text"] in ("확인", "취소", "OK")]
+    if len(buttons) != 1 or buttons[0]["text"] == "취소":
+        return None
+    return buttons[0]
 
 
 def _composer(nodes):
