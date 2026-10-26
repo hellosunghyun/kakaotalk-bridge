@@ -80,7 +80,9 @@ object CollectorSender {
             "image" -> "image/*"
             "video" -> "video/*"
             "audio" -> "audio/*"
-            else -> "*/*"
+            // `*/*` is forwarded to the main screen and never sent on 26.9.1;
+            // `application/octet-stream` is sent as a file (type 18) to `key_id`.
+            else -> "application/octet-stream"
         }
         val action = if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE
         return Intent(action).apply {
