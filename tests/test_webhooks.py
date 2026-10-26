@@ -378,3 +378,196 @@ def test_post_pins_validated_address_and_does_not_follow_redirects(monkeypatch):
         "method": "POST",
         "path": "/k?a=1",
     }
+
+
+# --- instant acks -------------------------------------------------------------
+
+ACK_TEXT = "💭 Grok Bot"
+
+
+def ack_rule(**overrides):
+    raw = {
+        "id": "ai-tag",
+        "text": ACK_TEXT,
+        "conversation_refs": [REF],
+        "mentions": ["@김성현"],
+        "skip_prefixes": ["Grok Bot 입니다."],
+        **overrides,
+    }
+    return webhooks.parse_acks([raw])[0]
+
+
+class SendingCollector(FakeCollector):
+    def __init__(self, *args, outcomes=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sent, self.outcomes = [], list(outcomes or [])
+
+    def outgoing(self, request_id=None, body=None):
+        self.sent.append(body)
+        outcome = self.outcomes.pop(0) if self.outcomes else {"status": "queued"}
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"request_id": body["request_id"], **outcome}
+
+
+def ack_forwarder(tmp_path, collector, rules=None, clock=None, targets=()):
+    return webhooks.Forwarder(
+        list(targets),
+        collector,
+        str(tmp_path / "webhooks.db"),
+        sender=Recorder(),
+        clock=clock or (lambda: 1000.0),
+        acks=rules if rules is not None else [ack_rule()],
+    )
+
+
+def test_instant_ack_once_per_tag_in_room_only(tmp_path):
+    collector = SendingCollector([], cursor=0)
+    fw = ack_forwarder(tmp_path, collector)
+    fw.tick()  # cursor starts at current position, no backfill
+    collector.add(
+        row(1, body="@김성현 질문"),
+        row(2, body="@김성현 다른 방", ref=OTHER),
+        row(3, body="그냥 대화"),
+        row(4, body="@김성현 내가 직접", mine=True),
+        row(5, body=ACK_TEXT, mine=True),
+        row(6, body="💭 Grok Bot @김성현", mine=True),
+        row(7, body="Grok Bot 입니다. @김성현 님 답이에요", mine=True),
+    )
+    fw.tick()
+    fw.tick()
+    assert [b["text"] for b in collector.sent] == [ACK_TEXT, ACK_TEXT]
+    assert {b["conversation_ref"] for b in collector.sent} == {REF}
+    ids = [b["request_id"] for b in collector.sent]
+    assert len(set(ids)) == 2
+    assert ids[0] == webhooks.ack_request_id(EPOCH, "ai-tag", 1)
+
+
+def test_instant_ack_survives_restart_without_duplicates(tmp_path):
+    collector = SendingCollector([], cursor=0)
+    ack_forwarder(tmp_path, collector).tick()
+    collector.add(row(1, body="@김성현 hi"))
+    ack_forwarder(tmp_path, collector).tick()
+    ack_forwarder(tmp_path, collector).tick()
+    assert len(collector.sent) == 1
+
+
+def test_instant_ack_retries_same_request_id_then_expires(tmp_path):
+    now = [1000.0]
+    collector = SendingCollector(
+        [], cursor=0, outcomes=[RuntimeError("x"), QueryError("send_rate_limited")]
+    )
+    fw = ack_forwarder(tmp_path, collector, clock=lambda: now[0])
+    fw.tick()
+    collector.add(row(1, body="@김성현 a"), row(2, body="@김성현 b"))
+    fw.tick()  # 1: unknown result, 2: rate limited
+    now[0] += 3
+    fw.tick()  # both retried with the same ids and succeed
+    assert [b["request_id"] for b in collector.sent[2:]] == [
+        b["request_id"] for b in collector.sent[:2]
+    ]
+    now[0] += 1000
+    fw.tick()
+    assert len(collector.sent) == 4
+
+
+def test_instant_ack_non_retryable_error_and_expiry(tmp_path):
+    now = [1000.0]
+    collector = SendingCollector(
+        [], cursor=0, outcomes=[QueryError("conversation_not_in_current_enrollment")]
+    )
+    fw = ack_forwarder(tmp_path, collector, clock=lambda: now[0])
+    fw.tick()
+    collector.add(row(1, body="@김성현 a"))
+    fw.tick()
+    now[0] += 10
+    fw.tick()
+    assert len(collector.sent) == 1
+    # A tag found too late is never acked.
+    collector.outcomes = [RuntimeError("x")] * 100
+    collector.add(row(2, body="@김성현 b"))
+    for _ in range(80):
+        now[0] += 3
+        fw.tick()
+    assert 1 < len(collector.sent) <= 1 + webhooks.ACK_MAX_AGE // 3 + 1
+
+
+def test_instant_ack_skips_stale_messages(tmp_path):
+    collector = SendingCollector([], cursor=0)
+    fw = ack_forwarder(tmp_path, collector, clock=lambda: 10_000.0)
+    fw.tick()
+    old = row(1, body="@김성현 old")
+    old["source_time"] = 1_000 * 1000
+    fresh = row(2, body="@김성현 new")
+    fresh["source_time"] = 9_999 * 1000
+    collector.add(old, fresh)
+    fw.tick()
+    assert [b["request_id"] for b in collector.sent] == [
+        webhooks.ack_request_id(EPOCH, "ai-tag", 2)
+    ]
+
+
+def test_instant_ack_failure_never_blocks_webhooks(tmp_path):
+    collector = SendingCollector([], cursor=0)
+
+    def broken(*a, **k):
+        raise ValueError("boom")
+
+    collector.outgoing = broken
+    sender = Recorder()
+    fw = webhooks.Forwarder(
+        [target(include_mine=True)],
+        collector,
+        str(tmp_path / "webhooks.db"),
+        sender=sender,
+        clock=lambda: 1000.0,
+        acks=[ack_rule()],
+    )
+    fw.tick()
+    collector.add(row(1, body="@김성현 hi"))
+    fw.tick()
+    assert [c[1]["message_id"] for c in sender.calls] == ["1"]
+
+
+def test_instant_ack_include_mine_false(tmp_path):
+    collector = SendingCollector([], cursor=0)
+    fw = ack_forwarder(tmp_path, collector, rules=[ack_rule(include_mine=False)])
+    fw.tick()
+    collector.add(row(1, body="@김성현 me", mine=True), row(2, body="@김성현 you"))
+    fw.tick()
+    assert [b["request_id"] for b in collector.sent] == [
+        webhooks.ack_request_id(EPOCH, "ai-tag", 2)
+    ]
+
+
+def test_instant_ack_config(tmp_path):
+    path = tmp_path / "targets.json"
+    item = {
+        "id": "ai-tag",
+        "text": ACK_TEXT,
+        "conversation_refs": [REF],
+        "mentions": ["@김성현"],
+    }
+    raw = {"targets": [{"id": "home", "url": "https://hooks.example.com/k", "secret": SECRET}]}
+    path.write_text(json.dumps({**raw, "instant_acks": [item]}))
+    env = {"KAKAO_WEBHOOK_TARGETS_FILE": str(path)}
+    targets, acks = webhooks.load_config(env)
+    assert [t.id for t in targets] == ["home"] and acks[0].include_mine is True
+    assert webhooks.load_targets(env)[0].id == "home"
+    assert webhooks.load_config({**env, "KAKAO_INSTANT_ACKS": "off"})[1] == []
+    path.write_text(json.dumps({**raw, "instant_acks": [{**item, "enabled": False}]}))
+    assert webhooks.load_config(env)[1] == []
+    path.write_text(json.dumps({"instant_acks": [item]}))
+    fw = webhooks.Forwarder.from_env(
+        SendingCollector([]), {**env, "DOT_WEBHOOK_DB": str(tmp_path / "w.db")}
+    )
+    assert fw is not None and list(fw.acks) == ["ai-tag"] and fw.targets == {}
+    for bad in (
+        {**item, "conversation_refs": []},
+        {**item, "mentions": []},
+        {**item, "text": " "},
+        {**item, "extra": 1},
+        {**item, "include_mine": "yes"},
+    ):
+        with pytest.raises(webhooks.ConfigError):
+            webhooks.parse_acks([bad])
