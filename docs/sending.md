@@ -70,8 +70,8 @@
 | 기능 | 요청 | 동작 |
 | --- | --- | --- |
 | 인용(답장) | `reply_to` = 그 메시지의 `log_id` (`message_id`가 아님), 그리고 텍스트 | 방을 열고, 미리보기가 들어 있는 말풍선을 길게 눌러 `답장`을 누른 뒤 WebInputMethod로 입력하고 전송 |
-| 이모티콘 | `favorite_index` 0–29 | 이모티콘 버튼, 즐겨찾기, 그 칸의 보유 이모티콘, 전송 |
-| 위치 | `latitude`, `longitude`, 선택적 `location_title` / `location_address` | 더보기, 지도/위치, 주소·제목 또는 `위도,경도` 검색, `이 위치 보내기` |
+| 이모티콘 | `favorite_index` 0–29 | 이모티콘 패널이 닫혀 있으면 이모티콘 버튼(26.9.1 태블릿은 패널 열림 상태가 방을 바꿔도 남음), `최근사용 이모티콘 및 즐겨찾기` 탭, `즐겨찾기` 제목 아래 칸(`emoticon_icon`, 위→아래·왼→오른 순서), 미리보기, 입력창 `전송`. 화면에 보이지 않는 번호는 `ui_action_failed` |
+| 위치 | `latitude`, `longitude`, 선택적 `location_title` / `location_address` | `미디어 전송 키보드 열기`(`media_send_layout`), `지도`, 위치서비스 안내가 뜨면 `취소`, 웹 지도의 `검색어를 입력하세요`에 주소·제목 또는 `위도,경도` 입력 후 Enter, 첫 번째 검색 결과의 `이 장소 보내기`. 좌표만 주면 검색 결과가 없을 수 있음 |
 
 인용할 메시지는 같은 방에 수집되어 있어야 하고 보이는 본문이 있어야 합니다. 없으면 `reply_source_not_found` 또는 `reply_source_has_no_visible_text`입니다. 미리보기는 200자이며 작업자가 가져가면 서버에서 지웁니다. `thread_id`와 `reply_to`는 같이 쓰지 않습니다.
 
@@ -84,7 +84,9 @@ am start -n com.kakao.talk/com.kakao.talk.activity.chatroom.ChatRoomActivity \
 
 덤프에 입력창(`message_edit_text` 또는 `send_button_layout`)이 없으면 숫자만 허용하는 `kakaotalk://chatroom/<chat_id>`를 한 번 더 엽니다. 방 ID는 셸 문자열이 아니라 인자로 넘깁니다. 동작이 성공하든 실패하든 카카오톡 메인(26.9.1에서는 `AdaptiveMainActivity`)으로 돌아가고, 바꾸기 전 키보드가 `패키지/클래스` 형식이면 그 키보드로 되돌립니다. UI 덤프는 메시지 본문이 들어 있으므로 메모리에서만 읽고 `/data/local/tmp/kb-ui-dump.xml`과 `/sdcard/window_dump.xml`을 바로 지웁니다. 호스트에 덤프를 저장하지 않습니다.
 
-**방을 열면 그 방이 읽음 처리됩니다.** 전체 동작의 제한 시간은 약 45초이고, 그동안 수집 폴링은 그 작업자 턴에서 기다립니다.
+**방을 열면 그 방이 읽음 처리됩니다.** 전체 동작의 제한 시간은 약 45초이고, 그동안 수집 폴링은 그 작업자 턴에서 기다립니다. 각 단계는 `{"ui_step": ..., "kind": ..., "ok": ..., "elapsed_ms": ...}` 한 줄로 iris-collector 로그에 남습니다. 화면 글자는 남기지 않습니다. 시간 초과면 마지막 줄의 `ui_step`이 멈춘 단계입니다.
+
+26.9.1에는 `ChatRoomActivity` 클래스가 없어 첫 단계는 항상 실패하고 딥링크로 열립니다.
 
 인용·이모티콘·위치의 탭 순서는 코드에 있고 테스트는 가짜 화면으로 확인합니다. 로그인된 26.9.1에서 실제로 전송되는지는 아직 확인하지 않았습니다. 위치는 26.9.1 조사에서 종류 100으로 남았습니다.
 

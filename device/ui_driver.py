@@ -25,6 +25,7 @@ The room counts as open only when the dump shows `message_edit_text` or
 26.9.1) is started so the device is not left inside the room.
 """
 
+import json
 import os
 import re
 import time
@@ -94,8 +95,10 @@ class UiDriver:
         if not CHAT_ID.fullmatch(chat_id):
             raise RuntimeError("ui_action_failed")
         kind = item.get("kind")
+        self.kind = kind
         previous = self._current_ime()
-        self.deadline = self.clock() + self.timeout
+        self.started = self.clock()
+        self.deadline = self.started + self.timeout
         try:
             with screen_lock(timeout=self.timeout, clock=self.clock, sleep=self.sleep):
                 ensure_awake(self.adb, sleep=self.sleep)
@@ -108,21 +111,35 @@ class UiDriver:
                     self._location(item)
                 else:
                     raise RuntimeError("ui_action_failed")
-        except TimeoutError:
+        except TimeoutError as exc:
+            self._log(str(exc.args[0]) if exc.args else "unknown", ok=False)
             raise RuntimeError("ui_action_timeout") from None
         finally:
             self._delete_dumps()
             self._main_screen()
             self._restore_ime(previous)
 
-    def _wait(self, predicate):
+    def _log(self, step, ok=True, **extra):
+        """Step name and timing only. Never node text, which can hold message content."""
+        record = {
+            "ui_step": step,
+            "kind": getattr(self, "kind", None),
+            "ok": ok,
+            "elapsed_ms": int((self.clock() - getattr(self, "started", self.clock())) * 1000),
+        }
+        record.update(extra)
+        print(json.dumps(record), flush=True)
+
+    def _wait(self, predicate, step="wait"):
+        started = self.clock()
         while True:
             nodes = _nodes(self._dump())
             found = predicate(nodes)
             if found:
+                self._log(step, step_ms=int((self.clock() - started) * 1000))
                 return found
             if self.clock() >= self.deadline:
-                raise TimeoutError("ui_action_timeout")
+                raise TimeoutError(step)
             self.sleep(0.4)
 
     def _dump(self):
@@ -164,6 +181,7 @@ class UiDriver:
         )
         self.sleep(0.3)
         if _composer(_nodes(self._dump())):
+            self._log("room_open_explicit")
             return
         self.adb(
             "shell",
@@ -174,42 +192,56 @@ class UiDriver:
             "-d",
             f"kakaotalk://chatroom/{chat_id}",
         )
-        self._wait(lambda nodes: _composer(nodes))
+        self._wait(lambda nodes: _composer(nodes), "room_open_deeplink")
 
     def _quote(self, item):
         preview = (item.get("reply_preview") or "").strip()
         text = item.get("text") or ""
         if not preview or not text.strip():
             raise RuntimeError("ui_action_failed")
-        bubble = self._wait(lambda nodes: _lowest(nodes, lambda n: preview in n["text"]))
+        bubble = self._wait(
+            lambda nodes: _lowest(nodes, lambda n: preview in n["text"]), "quote_bubble"
+        )
         self._long_press(bubble)
-        self._tap(self._wait(lambda nodes: _first(nodes, lambda n: n["text"] == "답장")))
-        self._tap(self._wait(lambda nodes: _composer(nodes)))
+        self._tap(self._wait(lambda nodes: _first(nodes, lambda n: n["text"] == "답장"), "quote_menu"))
+        self._tap(self._wait(lambda nodes: _composer(nodes), "quote_composer"))
         self._enable_keyboard()
         self.commit_text(text)
-        self._tap(self._wait(lambda nodes: _send(nodes)))
+        self._tap(self._wait(lambda nodes: _send(nodes), "quote_send"))
 
     def _emoticon(self, item):
+        """26.9.1 tablet: the panel keeps its open state between rooms, so open it only if closed.
+
+        Grid cells are `com.kakao.talk.emoticon:id/emoticon_icon` under the `즐겨찾기` header of the
+        `최근사용 이모티콘 및 즐겨찾기` tab. Tapping a cell opens a preview (`emoticon_preview_root`);
+        the composer's `send_button_layout` sends it.
+        """
         index = item.get("emoticon_index")
         if not isinstance(index, int) or not 0 <= index <= 29:
             raise RuntimeError("ui_action_failed")
-        self._tap(
-            self._wait(
-                lambda nodes: _first(
-                    nodes,
-                    lambda n: n["rid"].endswith("emoticon_button") or n["text"] == "이모티콘",
-                )
-            )
-        )
-        favorites = self._wait(
-            lambda nodes: _first(nodes, lambda n: n["text"] in {"즐겨찾기", "이모티콘"})
-        )
-        self._tap(favorites)
-        owned = self._wait(lambda nodes: _indexed(nodes, "emoticon_view", index))
-        self._tap(owned)
-        self._tap(self._wait(lambda nodes: _send(nodes)))
+        nodes = _nodes(self._dump())
+        if not _emoticon_panel(nodes):
+            self._tap(self._wait(_emoticon_toggle, "emoticon_button"))
+            nodes = self._wait(lambda found: found if _emoticon_panel(found) else None, "emoticon_panel")
+        tab = _first(nodes, lambda n: n["desc"].endswith("이모티콘, 탭, 4개 중 2번째") or n["desc"] == "이모티콘, 탭")
+        if tab and not tab["desc"].startswith("선택됨"):
+            self._tap(tab)
+        self._tap(self._wait(_favorites_tab, "emoticon_favorites_tab"))
+        cells = self._wait(lambda found: _favorite_cells(found) or None, "emoticon_favorites")
+        if index >= len(cells):
+            self._log("emoticon_index_not_visible", ok=False, visible=len(cells))
+            raise RuntimeError("ui_action_failed")
+        self._tap(cells[index])
+        self._wait(_emoticon_preview, "emoticon_preview")
+        self._tap(self._wait(lambda nodes: _send(nodes), "emoticon_send"))
+        self._wait(lambda nodes: None if _emoticon_preview(nodes) else (nodes or None), "emoticon_sent")
 
     def _location(self, item):
+        """26.9.1: `media_send_layout` opens a sheet with `지도`; KakaoMapChatPlusWebActivity loads a
+        web map. A "위치서비스" dialog may appear first and is dismissed with `취소`. The search
+        field is the web node `검색어를 입력하세요`; Enter lists results, each with `이 장소 보내기`.
+        The first visible result is sent and the room composer comes back.
+        """
         location = item.get("location") or {}
         label = location.get("address") or location.get("title")
         if not label:
@@ -217,18 +249,18 @@ class UiDriver:
             if lat is None or lng is None:
                 raise RuntimeError("ui_action_failed")
             label = f"{lat},{lng}"
-        self._tap(
-            self._wait(
-                lambda nodes: _first(
-                    nodes,
-                    lambda n: n["rid"].endswith("chat_plus_button") or n["desc"] in {"더보기", "첨부"},
-                )
-            )
-        )
-        self._tap(self._wait(lambda nodes: _first(nodes, lambda n: n["text"] in {"지도", "위치"})))
+        self._tap(self._wait(_media_sheet_button, "location_media_button"))
+        self._tap(self._wait(_map_entry, "location_map_entry"))
+        search = self._wait(_map_search_or_dialog, "location_map_loaded")
+        if search["text"] == "취소":
+            self._tap(search)
+            search = self._wait(_map_search, "location_map_search")
+        self._tap(search)
         self._enable_keyboard()
         self.commit_text(str(label)[:120])
-        self._tap(self._wait(lambda nodes: _first(nodes, lambda n: n["text"] == "이 위치 보내기")))
+        self.adb("shell", "input", "keyevent", "66")
+        self._tap(self._wait(_place_send, "location_result"))
+        self._wait(lambda nodes: _composer(nodes), "location_sent")
 
     def _enable_keyboard(self):
         from device.cli import IME
@@ -284,6 +316,73 @@ class UiDriver:
                 "com.kakao.talk",
                 check=False,
             )
+
+
+def _emoticon_toggle(nodes):
+    return _first(
+        nodes,
+        lambda n: n["rid"].endswith((":id/emoticon_button", ":id/emoticon_button_layout"))
+        or n["desc"] == "이모티콘 키보드 열기"
+        or n["text"] == "이모티콘",
+    )
+
+
+def _emoticon_panel(nodes):
+    return _first(
+        nodes,
+        lambda n: n["rid"].endswith((":id/emoticon_grid", ":id/keyboard_tab_bar"))
+        or n["desc"] == "이모티콘 키보드 닫기",
+    )
+
+
+def _favorites_tab(nodes):
+    return _first(nodes, lambda n: n["desc"] == "최근사용 이모티콘 및 즐겨찾기")
+
+
+def _favorite_cells(nodes):
+    """Cells below the `즐겨찾기` header and above the next section header, in reading order."""
+    headers = [n for n in nodes if n["rid"].endswith(":id/title") and n["text"]]
+    start = next((n for n in headers if n["text"] == "즐겨찾기"), None)
+    if start is None:
+        return []
+    below = [n["y"] for n in headers if n["y"] > start["y"]]
+    end = min(below) if below else float("inf")
+    cells = [
+        n for n in nodes if n["rid"].endswith(":id/emoticon_icon") and start["y"] < n["y"] < end
+    ]
+    return sorted(cells, key=lambda node: (node["y"], node["x"]))
+
+
+def _emoticon_preview(nodes):
+    return _first(nodes, lambda n: n["rid"].endswith(":id/emoticon_preview_root"))
+
+
+def _media_sheet_button(nodes):
+    return _first(
+        nodes,
+        lambda n: n["rid"].endswith((":id/media_send_layout", "chat_plus_button"))
+        or n["desc"] in {"미디어 전송 키보드 열기", "더보기", "첨부"},
+    )
+
+
+def _map_entry(nodes):
+    return _first(nodes, lambda n: n["desc"] in {"지도", "위치"}) or _first(
+        nodes, lambda n: n["rid"].endswith(":id/tv_label") and n["text"] in {"지도", "위치"}
+    )
+
+
+def _map_search(nodes):
+    return _first(nodes, lambda n: n["text"] == "검색어를 입력하세요")
+
+
+def _map_search_or_dialog(nodes):
+    if any("위치서비스" in n["text"] for n in nodes):
+        return _first(nodes, lambda n: n["text"] == "취소")
+    return _map_search(nodes)
+
+
+def _place_send(nodes):
+    return _first(nodes, lambda n: n["text"] == "이 장소 보내기")
 
 
 def _composer(nodes):

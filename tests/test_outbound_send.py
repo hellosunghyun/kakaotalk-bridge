@@ -518,3 +518,137 @@ def test_ui_worker_fails_closed_when_the_flag_is_off(sending, monkeypatch):
     collector.send_pending(CONFIG)
     assert status(client, body | {"reply_to": "10"})["reason"] == "ui_actions_disabled"
 
+
+
+def _scripted_adb(pages, calls):
+    """Each uiautomator dump shows the next page; the last page repeats."""
+
+    def adb(*args, check=True, timeout=25):
+        calls.append(args)
+        if args[:3] == ("shell", "dumpsys", "window"):
+            return "mDreamingLockscreen=false"
+        if args[:3] == ("shell", "dumpsys", "power"):
+            return "Display Power: state=ON"
+        if args[:3] == ("shell", "settings", "get"):
+            return "com.android.inputmethod.latin/.LatinIME"
+        if args[1] == "uiautomator":
+            adb.page = pages.pop(0) if len(pages) > 1 else pages[0]
+            return ""
+        if args[1] == "cat":
+            return adb.page
+        if args[1] == "cmd":
+            return "com.kakao.talk/com.kakao.talk.activity.main.AdaptiveMainActivity"
+        return ""
+
+    adb.page = ""
+    return adb
+
+
+EMO = "com.kakao.talk.emoticon:id/"
+ROOM = _xml(**{"resource-id": "com.kakao.talk:id/message_edit_text", "bounds": "[684,1184][1046,1238]"})
+
+
+def _emoticon_grid(*extra):
+    return hierarchy(
+        ROOM,
+        _xml(**{"resource-id": EMO + "emoticon_grid", "bounds": "[597,1418][1187,1830]"}),
+        _xml(**{"content-desc": "선택됨, 이모티콘, 탭, 4개 중 2번째", "bounds": "[787,1300][892,1347]"}),
+        _xml(**{"content-desc": "최근사용 이모티콘 및 즐겨찾기", "bounds": "[606,1355][678,1418]"}),
+        _xml(text="최근사용", **{"resource-id": EMO + "title", "bounds": "[597,1418][1187,1481]"}),
+        _xml(**{"resource-id": EMO + "emoticon_icon", "bounds": "[623,1487][719,1583]"}),
+        _xml(text="즐겨찾기", **{"resource-id": EMO + "title", "bounds": "[597,1589][1187,1652]"}),
+        _xml(**{"resource-id": EMO + "emoticon_icon", "bounds": "[623,1658][719,1754]"}),
+        _xml(**{"resource-id": EMO + "emoticon_icon", "bounds": "[770,1658][866,1754]"}),
+        *extra,
+    )
+
+
+def test_emoticon_opens_closed_panel_and_taps_the_indexed_favorite(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    closed = hierarchy(
+        ROOM,
+        _xml(**{"resource-id": "com.kakao.talk:id/emoticon_button", "bounds": "[1058,1193][1094,1229]"}),
+    )
+    preview = _emoticon_grid(
+        _xml(**{"resource-id": EMO + "emoticon_preview_root", "bounds": "[751,953][1033,1163]"}),
+        _xml(**{"resource-id": "com.kakao.talk:id/send_button_layout", "bounds": "[1106,1175][1172,1247]"}),
+    )
+    pages = [closed, closed, closed, _emoticon_grid(), _emoticon_grid(), _emoticon_grid(), preview, preview, closed]
+    calls = []
+    UiDriver(_scripted_adb(pages, calls), lambda _text: None, sleep=lambda _s: None).perform(
+        {"kind": "emoticon", "chat_id": CHAT, "emoticon_index": 1}
+    )
+    taps = [call[3:] for call in calls if call[:3] == ("shell", "input", "tap")]
+    # emoticon button, favorites tab, second favorite (not the recent one), send
+    assert taps == [("1076", "1211"), ("642", "1386"), ("818", "1706"), ("1139", "1211")]
+    assert not any("uiautomator" in call and "/sdcard" in " ".join(call) for call in calls)
+
+
+def test_emoticon_does_not_toggle_an_open_panel_shut(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    calls = []
+    pages = [_emoticon_grid()]
+    with pytest.raises(RuntimeError, match="ui_action_failed"):
+        UiDriver(_scripted_adb(pages, calls), lambda _text: None, sleep=lambda _s: None).perform(
+            {"kind": "emoticon", "chat_id": CHAT, "emoticon_index": 5}
+        )
+    taps = [call[3:] for call in calls if call[:3] == ("shell", "input", "tap")]
+    assert taps == [("642", "1386")]
+
+
+def test_location_searches_the_web_map_and_sends_the_first_place(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    room = hierarchy(
+        ROOM,
+        _xml(**{"resource-id": "com.kakao.talk:id/media_send_layout", "content-desc": "미디어 전송 키보드 열기", "bounds": "[618,1175][678,1247]"}),
+    )
+    sheet = hierarchy(_xml(**{"content-desc": "지도", "bounds": "[0,1670][1200,1740]"}))
+    dialog = hierarchy(
+        _xml(text="위치서비스를 이용할 수 없습니다.", bounds="[351,829][849,955]"),
+        _xml(text="취소", bounds="[675,964][768,1036]"),
+    )
+    blank = hierarchy(_xml(text="검색어를 입력하세요", bounds="[24,114][1176,183]"),
+                      _xml(text="이 위치 보내기", bounds="[0,0][0,0]"))
+    results = hierarchy(
+        _xml(text="이 장소 보내기", bounds="[24,1107][1176,1162]"),
+        _xml(text="이 장소 보내기", bounds="[24,1362][1176,1419]"),
+    )
+    pages = [room, room, sheet, dialog, blank, results, room]
+    calls, typed = [], []
+    UiDriver(_scripted_adb(pages, calls), typed.append, sleep=lambda _s: None).perform(
+        {"kind": "location", "chat_id": CHAT, "location": {"title": "서울시청", "latitude": 37.5, "longitude": 127.0}}
+    )
+    taps = [call[3:] for call in calls if call[:3] == ("shell", "input", "tap")]
+    assert taps == [("648", "1211"), ("600", "1705"), ("721", "1000"), ("600", "148"), ("600", "1134")]
+    assert typed == ["서울시청"]
+    assert ("shell", "input", "keyevent", "66") in calls
+
+
+def test_step_log_has_names_and_timing_but_no_node_text(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("KAKAO_UI_ACTIONS", "on")
+    monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
+    clock = {"now": 0.0}
+
+    def monotonic():
+        clock["now"] += 1
+        return clock["now"]
+
+    pages = [hierarchy(ROOM, _xml(text="비밀 메시지 본문", bounds="[0,0][10,10]"))]
+    with pytest.raises(RuntimeError, match="ui_action_timeout"):
+        UiDriver(_scripted_adb(pages, []), lambda _t: None, sleep=lambda _s: None, clock=monotonic, timeout=6).perform(
+            {"kind": "location", "chat_id": CHAT, "location": {"title": "x"}}
+        )
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert lines[-1]["ui_step"] == "location_media_button" and lines[-1]["ok"] is False
+    assert all("elapsed_ms" in line for line in lines)
+    assert "비밀" not in json.dumps(lines, ensure_ascii=False)
+
+
+def test_activity_lookup_failure_is_a_known_fail_reason():
+    from server.outgoing import FAIL_REASONS
+
+    assert "kakao_activity_unavailable" in FAIL_REASONS
+    assert "kakao_activity_unavailable" in iris._FAIL_REASONS
