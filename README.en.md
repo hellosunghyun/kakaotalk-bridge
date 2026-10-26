@@ -31,8 +31,10 @@ Bridge runs a virtual Android tablet with redroid, along with KakaoTalk and Iris
 Run this in a terminal on an Apple Silicon Mac or a Linux server. [Requirements](#requirements-and-validation)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
+
+> To have an AI coding agent install it from just this repository link, point it at [AGENTS.md](AGENTS.md).
 
 When it finishes, the admin console opens in your browser. From then on, run commands such as `kakaotalk-bridge doctor` from any folder. If Bridge is already installed, the same command updates it to the latest version for your install type. For a server without a display, see [installing over SSH](docs/quickstart.md#local-and-ssh-admin-access).
 
@@ -137,6 +139,30 @@ The Mac VM is configured with 6 CPUs and 8 GiB of memory. This is not a measured
 The official redroid image ships an outdated Android security patch, so use a dedicated host or VM.
 [Security and remaining risks](docs/security.md) · [How collection works](docs/iris.md)
 
+<a id="prebuilt-arm-images"></a>
+## Prebuilt ARM images
+
+Building the device image on the aarch64 server emulates the x86_64 Android SDK and takes more than 90 minutes. GitHub Actions builds `linux/arm64` images and pushes them to GHCR. Leave the variables unset to keep building `kakaotalk-bridge/{device,server,gateway}:local`.
+
+Log in once with a GitHub token that has `read:packages`. The token is the password. Do not put it in shell history.
+
+```bash
+docker login ghcr.io
+```
+
+Set the same tag in `.env`. Tags are the 7-character commit SHA and the branch name (`/` replaced with `-`). The device image also carries `iris-ee1dc978-collector-v8`.
+
+```bash
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/gateway:<tag>
+
+docker compose pull api gateway device-agent iris-collector admin
+docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin
+```
+
+Do not include `redroid`. Do not run `docker compose down` or pass `-v`, and do not touch the `android-data` volume. When `iris-collector` restarts, the existing `ensure_started` path swaps the collector APK and restarts only `app_process` inside the running Android container. Profile services and the keyboard signing secrets are in the [operations guide](docs/operations.md#ghcr-images) (Korean).
+
 <a id="documentation"></a>
 ## Documentation
 
@@ -150,6 +176,7 @@ The documents below are in Korean.
 | Choose which conversations send events | [MCP Events](docs/events.md) |
 | Manage access, update, and recover | [Passkeys](docs/passkeys.md) · [Operations](docs/operations.md) |
 | Deploy or develop internals | [Advanced install](docs/onboarding.md) · [Architecture](docs/design.md) · [Development](docs/development.md) |
+| Pull images instead of building on the server | [Prebuilt ARM images](#prebuilt-arm-images) · [operations](docs/operations.md#ghcr-images) |
 
 To update an existing install, run the install command again. [Updating an existing install](docs/operations.md#update)
 [Contributing](CONTRIBUTING.md)

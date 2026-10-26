@@ -104,7 +104,7 @@ if [[ -z "$bridge_helper" ]]; then
   # verifies release bundles against GitHub's asset SHA-256, and it upgrades existing
   # installations with the new version's code before any installed code runs.
   bridge_run curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-    https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/ops/releases.py \
+    https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/ops/releases.py \
     -o "$bridge_helper_dir/releases.py"
   bridge_helper="$bridge_helper_dir/releases.py"
 fi

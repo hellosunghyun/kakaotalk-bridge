@@ -25,7 +25,7 @@ def build(version, digests, destination):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "images": {
-            kind: f"ghcr.io/{REPOSITORY}-{kind}@{digest}" for kind, digest in digests.items()
+            kind: f"ghcr.io/{REPOSITORY}/{kind}@{digest}" for kind, digest in digests.items()
         },
     }
     validate_manifest(data)

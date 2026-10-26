@@ -19,7 +19,7 @@ def manifest(version="v0.1.0"):
         "schema": 1,
         "version": version,
         "images": {
-            kind: f"ghcr.io/{releases.REPOSITORY}-{kind}@sha256:" + "a" * 64
+            kind: f"ghcr.io/{releases.REPOSITORY}/{kind}@sha256:" + "a" * 64
             for kind in ("server", "device", "gateway")
         },
     }

@@ -21,7 +21,11 @@ BINDER_CONFIG = {
 }
 # Install-folder state; a Git checkout keeps its source code.
 STATE = (".env", "secrets", ".bridge", "backups", "inputs", "artifacts")
-IMAGE_PREFIXES = ("ghcr.io/rokrokss/kakaotalk-bridge-", "kakaotalk-bridge/")
+IMAGE_PREFIXES = (
+    "ghcr.io/hellosunghyun/kakaotalk-bridge/",
+    "ghcr.io/rokrokss/kakaotalk-bridge-",
+    "kakaotalk-bridge/",
+)
 IMAGES = {"redroid/redroid", "ghcr.io/openai/tunnel-client"}
 
 

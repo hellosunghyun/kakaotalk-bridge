@@ -21,6 +21,7 @@ def snapshot_command(mode, names, *, key=None, stage=None, work=None, image=None
     env = cli.read_env()
     image = (
         image
+        or env.get("SERVER_IMAGE")
         or env.get("DOT_IMAGE")
         or env.get("COLLECTOR_IMAGE", "kakaotalk-bridge/server:local")
     )

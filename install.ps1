@@ -5,7 +5,7 @@ param(
     [string]$Distribution = 'Ubuntu'
 )
 $ErrorActionPreference = 'Stop'
-$installer = 'https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh'
+$installer = 'https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh'
 $command = "curl --fail --silent --show-error --location --proto '=https' $installer | bash -s -- --no-browser"
 
 if ($Remote) {

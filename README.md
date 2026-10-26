@@ -29,8 +29,10 @@ Bridge는 redroid로 가상 Android 태블릿을 띄우고 카카오톡과 Iris�
 Apple Silicon Mac 또는 Linux 서버의 터미널에서 실행하세요. [실행 환경](#requirements-and-validation)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rokrokss/kakaotalk-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hellosunghyun/kakaotalk-bridge/main/install.sh | bash
 ```
+
+> AI 코딩 에이전트에게 이 레포 링크만 주고 설치를 맡기려면 [AGENTS.md](AGENTS.md)를 읽게 하세요.
 
 끝나면 브라우저에 관리 화면이 열립니다. 이후에는 어느 폴더에서나 `kakaotalk-bridge doctor`처럼 명령을 실행합니다. 이미 설치했다면 같은 설치 명령이 설치 형태에 맞게 최신 버전으로 업데이트합니다. 화면 없는 서버는 [SSH 설치](docs/quickstart.md#local-and-ssh-admin-access)를 보세요.
 
@@ -135,6 +137,30 @@ Mac VM에는 CPU 6개와 메모리 8 GiB가 설정됩니다. 측정된 최소 �
 공식 redroid 이미지의 Android 보안 패치가 오래되었으므로 전용 호스트 또는 VM을 사용하세요.
 [보안과 남은 위험](docs/security.md) · [수집 방식](docs/iris.md)
 
+<a id="prebuilt-arm-images"></a>
+## 미리 만든 ARM 이미지
+
+aarch64 서버에서 기기 이미지를 빌드하면 Android SDK를 에뮬레이션해 90분 이상 걸립니다. Actions가 `linux/arm64` 이미지를 GHCR에 올리면 서버는 받기만 합니다. 비워 두면 로컬 태그(`kakaotalk-bridge/{device,server,gateway}:local`)를 그대로 빌드합니다.
+
+`read:packages` 토큰으로 한 번 로그인합니다.
+
+```bash
+docker login ghcr.io
+```
+
+`.env`에 같은 태그를 적습니다. 태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`), 기기 이미지는 `iris-ee1dc978-collector-v8`입니다.
+
+```bash
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge/gateway:<tag>
+
+docker compose pull api gateway device-agent iris-collector admin
+docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin
+```
+
+**`redroid`는 넣지 마세요.** `docker compose down`과 `-v`도 쓰지 말고 `android-data` 볼륨을 건드리지 마세요. 수집기 APK는 `iris-collector`가 다시 시작될 때 `ensure_started`가 redroid 안의 `app_process`만 바꿉니다. 프로필 서비스와 서명 키는 [운영 안내](docs/operations.md#ghcr-images)에 있습니다.
+
 <a id="documentation"></a>
 ## 사용 안내
 
@@ -146,6 +172,7 @@ Mac VM에는 CPU 6개와 메모리 8 GiB가 설정됩니다. 측정된 최소 �
 | 이벤트를 보낼 대화 선택하기 | [MCP Events](docs/events.md) |
 | 접근 관리·업데이트·복구 | [패스키](docs/passkeys.md) · [운영](docs/operations.md) |
 | 배포 또는 내부 기능 개발 | [고급 설치](docs/onboarding.md) · [구조](docs/design.md) · [개발](docs/development.md) |
+| 서버에서 이미지 빌드를 건너뛰기 | [미리 만든 ARM 이미지](docs/operations.md#ghcr-images) |
 
 기존 설치는 설치 명령을 다시 실행해 업데이트합니다. [기존 설치 업데이트](docs/operations.md#update)
 [기여하기](CONTRIBUTING.md)

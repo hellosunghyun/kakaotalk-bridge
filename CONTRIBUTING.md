@@ -6,7 +6,7 @@
 
 ## 문제 제보
 
-[이슈](https://github.com/rokrokss/kakaotalk-bridge/issues)에 다음 내용을 포함해 주세요.
+[이슈](https://github.com/hellosunghyun/kakaotalk-bridge/issues)에 다음 내용을 포함해 주세요.
 
 - 호스트 운영체제·아키텍처와 Lima 사용 여부
 - 프로젝트 리비전, 관련 redroid 이미지와 카카오톡 버전

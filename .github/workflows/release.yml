@@ -1,113 +1,287 @@
-name: 릴리스 이미지 및 설치 파일
+# Publish a GitHub Release for a v* tag.
+# - Signed Android APKs are built once on x86_64 (the Android SDK tools are amd64-only).
+# - server/device/gateway images are built natively on amd64 and arm64 runners, pushed by
+#   digest, then joined into multi-arch tags ghcr.io/<owner>/<repo>/<kind>:<version> and :latest.
+# - The Release carries the APKs, the installer bundle, release.json (image digests),
+#   install scripts and SHA256SUMS.
+name: Release
+
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish (e.g. v0.4.0)
+        required: true
+        type: string
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
+
 permissions:
   contents: read
+
+env:
+  VERSION: ${{ inputs.tag || github.ref_name }}
+
 jobs:
-  images:
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-      attestations: write
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
       - name: Validate version
-        env:
-          VERSION: ${{ github.ref_name }}
         run: '[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]'
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
       - run: uv sync --frozen --python 3.12
       - run: uv run pytest -q
       - run: uv run ruff check .
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+
+  apks:
+    name: Build signed APKs (x86_64)
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Prepare stable Bridge signing identity
+          ref: refs/tags/${{ env.VERSION }}
+      - name: Prepare signing key
         env:
           KEYSTORE: ${{ secrets.BRIDGE_RELEASE_KEYSTORE_BASE64 }}
           PASSWORD: ${{ secrets.BRIDGE_RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
-          test -n "$KEYSTORE" && test -n "$PASSWORD"
+          if [[ -z "${KEYSTORE:-}" || -z "${PASSWORD:-}" ]]; then
+            echo "::error::Set repository secrets BRIDGE_RELEASE_KEYSTORE_BASE64 and BRIDGE_RELEASE_KEY_PASSWORD (see AGENTS.md#releases)."
+            exit 1
+          fi
           mkdir -p /tmp/bridge-signing
           printf '%s' "$KEYSTORE" | base64 -d > /tmp/bridge-signing/bridge.jks
           printf '%s' "$PASSWORD" > /tmp/bridge-signing/password
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        id: server
-        with:
-          context: .
-          file: docker/server.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository }}-server:${{ github.ref_name }}
-          build-args: VCS_REF=${{ github.sha }}
-          provenance: mode=max
-          sbom: true
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        id: device
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build APKs
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/device.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository }}-device:${{ github.ref_name }}
-          build-args: VCS_REF=${{ github.sha }}
+          target: apk-artifacts
+          platforms: linux/amd64
+          push: false
+          provenance: "false"
+          sbom: "false"
+          outputs: type=local,dest=${{ runner.temp }}/apk-artifacts
           secret-files: |
             bridge_keystore=/tmp/bridge-signing/bridge.jks
             bridge_key_password=/tmp/bridge-signing/password
-          provenance: mode=max
-          sbom: true
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        id: gateway
+          cache-from: type=gha,scope=device-apk
+          cache-to: type=gha,scope=device-apk,mode=max,ignore-error=true
+      - name: Check APK bundle
+        run: bash .github/scripts/flatten-apks.sh "${RUNNER_TEMP}/apk-artifacts"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          context: .
-          file: docker/gateway.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository }}-gateway:${{ github.ref_name }}
-          provenance: mode=max
-          sbom: true
-      - name: 설치 파일과 이미지 버전 묶기
-        env:
-          VERSION: ${{ github.ref_name }}
-          SERVER: ${{ steps.server.outputs.digest }}
-          DEVICE: ${{ steps.device.outputs.digest }}
-          GATEWAY: ${{ steps.gateway.outputs.digest }}
-        run: python3 scripts/build-release.py "$VERSION" --server "$SERVER" --device "$DEVICE" --gateway "$GATEWAY"
-      - name: 공개 이미지 다운로드 확인
-        run: python3 scripts/verify-release-images.py artifacts/release/release.json --wait-seconds 1200
-      - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
-        with:
-          subject-path: artifacts/release/*
-      - name: GitHub 릴리스 게시
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if gh release view "$VERSION" --json isDraft --jq .isDraft > /tmp/release-draft; then
-            test "$(cat /tmp/release-draft)" = true
-          else
-            gh release create "$VERSION" --draft --verify-tag --title "KakaoTalk Bridge $VERSION" --notes-file docs/release-notes.md
-          fi
-          gh release upload "$VERSION" artifacts/release/* --clobber
-          if [[ "$VERSION" == *-* ]]; then
-            gh release edit "$VERSION" --draft=false --prerelease --latest=false
-          else
-            gh release edit "$VERSION" --draft=false --latest
-          fi
+          name: device-apks
+          path: ${{ runner.temp }}/apk-artifacts
+          if-no-files-found: error
+          retention-days: 7
       - name: Remove signing material
         if: always()
         run: rm -rf /tmp/bridge-signing
+
+  images:
+    name: Image ${{ matrix.kind }} (${{ matrix.arch }})
+    needs: apks
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        kind: [server, device, gateway]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: device-apks
+          path: ${{ runner.temp }}/apk-artifacts
+      - id: meta
+        env:
+          KIND: ${{ matrix.kind }}
+        run: |
+          set -euo pipefail
+          repo=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${repo}/${KIND}" >> "$GITHUB_OUTPUT"
+          build_id=$(sed -n 's/^BUILD = "\([^"]*\)"$/\1/p' device/iris.py)
+          test -n "$build_id"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/${{ matrix.kind }}.Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-contexts: apk-artifacts=${{ runner.temp }}/apk-artifacts
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            COLLECTOR_BUILD=${{ steps.meta.outputs.build_id }}
+          labels: org.opencontainers.image.version=${{ env.VERSION }}
+          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: "false"
+          sbom: "false"
+          cache-from: type=gha,scope=release-${{ matrix.kind }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=release-${{ matrix.kind }}-${{ matrix.arch }},mode=max,ignore-error=true
+      - name: Record digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digests"
+          printf '%s\n' "$DIGEST" > "${RUNNER_TEMP}/digests/${{ matrix.kind }}-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.kind }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 7
+
+  manifests:
+    name: Multi-arch tags
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and record multi-arch indexes
+        run: |
+          set -euo pipefail
+          repo=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          dir="${RUNNER_TEMP}/digests"
+          mkdir -p "${RUNNER_TEMP}/indexes"
+          for kind in server device gateway; do
+            image="ghcr.io/${repo}/${kind}"
+            tags=(-t "${image}:${VERSION}")
+            if [[ "$VERSION" != *-* ]]; then tags+=(-t "${image}:latest"); fi
+            docker buildx imagetools create "${tags[@]}" \
+              "${image}@$(cat "$dir/${kind}-amd64")" "${image}@$(cat "$dir/${kind}-arm64")"
+            digest=$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            printf '%s\n' "$digest" > "${RUNNER_TEMP}/indexes/${kind}"
+            echo "${image}:${VERSION} -> ${digest}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-indexes
+          path: ${{ runner.temp }}/indexes/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: device-apks
+          path: ${{ runner.temp }}/apks
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: image-indexes
+          path: ${{ runner.temp }}/indexes
+      - name: Assemble release files
+        run: |
+          set -euo pipefail
+          out=artifacts/release
+          mkdir -p "$out"
+          cp "${RUNNER_TEMP}/apks/bridge.apk" "$out/kakaotalk-bridge-keyboard-${VERSION}.apk"
+          cp "${RUNNER_TEMP}/apks/iris.apk" "$out/iris-collector-unsigned-${VERSION}.apk"
+          idx="${RUNNER_TEMP}/indexes"
+          python3 scripts/build-release.py "$VERSION" \
+            --server "$(cat "$idx/server")" --device "$(cat "$idx/device")" --gateway "$(cat "$idx/gateway")" \
+            --output "$out"
+          ls -l "$out"
+          cat "$out/SHA256SUMS"
+      - name: Check anonymous image pulls
+        id: public
+        continue-on-error: true
+        run: python3 scripts/verify-release-images.py artifacts/release/release.json --wait-seconds 120
+      - name: Warn when packages are private
+        if: steps.public.outcome != 'success'
+        run: echo "::warning::GHCR packages are not publicly pullable yet. Set server/device/gateway packages to Public in GitHub Packages settings; the one-line installer pulls without logging in."
+      - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: artifacts/release/*
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          repo=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          {
+            cat docs/release-notes.md
+            echo
+            echo "## Images"
+            echo
+            echo '```'
+            python3 -c 'import json,sys; [print(v) for v in json.load(open(sys.argv[1]))["images"].values()]' artifacts/release/release.json
+            echo '```'
+            echo
+            echo "Multi-arch (linux/amd64, linux/arm64) tags: \`ghcr.io/${repo}/{server,device,gateway}:${VERSION}\`."
+          } > "${RUNNER_TEMP}/notes.md"
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          flags=(--latest)
+          if [[ "$VERSION" == *-* ]]; then flags=(--prerelease --latest=false); fi
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" artifacts/release/* --clobber
+            gh release edit "$VERSION" --notes-file "${RUNNER_TEMP}/notes.md" "${flags[@]}"
+          else
+            gh release create "$VERSION" artifacts/release/* --verify-tag \
+              --title "KakaoTalk Bridge $VERSION" --notes-file "${RUNNER_TEMP}/notes.md" "${flags[@]}"
+          fi
+          gh release view "$VERSION" --json url,assets --jq '.url, (.assets[].name)'

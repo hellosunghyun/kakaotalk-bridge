@@ -79,7 +79,7 @@ def test_release_manifest_requires_immutable_official_refs(tmp_path):
         "schema": 1,
         "version": "v0.2.0",
         "images": {
-            kind: "ghcr.io/rokrokss/kakaotalk-bridge-" + kind + "@sha256:" + "a" * 64
+            kind: "ghcr.io/hellosunghyun/kakaotalk-bridge/" + kind + "@sha256:" + "a" * 64
             for kind in ("server", "device", "gateway")
         },
     }
@@ -88,7 +88,7 @@ def test_release_manifest_requires_immutable_official_refs(tmp_path):
     for bad in (
         "evil.example/server@sha256:" + "a" * 64,
         "ghcr.io/example/another-project-server@sha256:" + "a" * 64,
-        "ghcr.io/rokrokss/kakaotalk-bridge-server:latest",
+        "ghcr.io/hellosunghyun/kakaotalk-bridge/server:latest",
     ):
         data["images"]["server"] = bad
         path.write_text(json.dumps(data))
@@ -434,6 +434,20 @@ def test_doctor_reports_certificate_expiry(tmp_path, monkeypatch, days, ok, text
         set(),
         ok,
     )
+
+
+def test_snapshot_command_prefers_server_image_then_existing_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    (tmp_path / ".env").write_text(
+        "SERVER_IMAGE=ghcr.io/example/server:sha\nDOT_IMAGE=dot\nCOLLECTOR_IMAGE=old\n"
+    )
+    assert "ghcr.io/example/server:sha" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("DOT_IMAGE=dot\nCOLLECTOR_IMAGE=old\n")
+    assert "dot" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("COLLECTOR_IMAGE=old\n")
+    assert "old" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("")
+    assert "kakaotalk-bridge/server:local" in backup.snapshot_command("create", {})
 
 
 @pytest.mark.parametrize("healthy", [True, False])

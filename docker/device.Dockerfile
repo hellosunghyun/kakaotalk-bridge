@@ -37,6 +37,17 @@ RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
     gradle --no-daemon :bridge:assembleRelease :bridge:lintRelease \
     && /opt/android-sdk/build-tools/35.0.0/apksigner verify bridge/build/outputs/apk/release/bridge-release.apk
 
+# Files the runtime image needs from the amd64 Gradle stages.
+# GitHub Actions replaces this stage (--build-context apk-artifacts=<dir>) with
+# artifacts built on an x86_64 runner, so the arm64 image build stays native.
+# Android command-line tools are linux/amd64 binaries.
+FROM scratch AS apk-artifacts
+COPY --from=android-build /opt/android-sdk/build-tools/35.0.0/lib/apksigner.jar /apksigner.jar
+COPY --from=bridge-build /src/bridge/build/outputs/apk/release/bridge-release.apk /bridge.apk
+COPY --from=iris-build /iris/app/build/outputs/apk/release/app-release-unsigned.apk /iris.apk
+COPY --from=iris-build /opt/iris-source.tar.gz /iris-source.tar.gz
+COPY --from=iris-build /opt/iris-dependencies.txt /iris-dependencies.txt
+
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS web-dependencies
 WORKDIR /build
 COPY requirements.lock .
@@ -46,10 +57,6 @@ RUN python -m pip install --no-cache-dir --require-hashes -r build-requirements.
     && python -m pip --python /opt/venv install --no-cache-dir --require-hashes -r requirements.lock
 
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
-ARG VCS_REF=development
-LABEL org.opencontainers.image.source="https://github.com/rokrokss/kakaotalk-bridge" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.licenses="MIT AND GPL-3.0-only"
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends adb ca-certificates openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
@@ -61,14 +68,23 @@ COPY device/ device/
 COPY server/ server/
 COPY webui/ webui/
 COPY dot_plugin/ dot_plugin/
-COPY --from=android-build /opt/android-sdk/build-tools/35.0.0/lib/apksigner.jar /opt/apksigner.jar
+COPY --from=apk-artifacts /apksigner.jar /opt/apksigner.jar
 COPY assets/logo.svg assets/
 COPY LICENSE .
-COPY --from=bridge-build /src/bridge/build/outputs/apk/release/bridge-release.apk /opt/bridge.apk
-COPY --from=iris-build /iris/app/build/outputs/apk/release/app-release-unsigned.apk /opt/iris.apk
-COPY --from=iris-build /opt/iris-source.tar.gz /opt/iris-source.tar.gz
-COPY --from=iris-build /opt/iris-dependencies.txt /opt/iris-dependencies.txt
+COPY --from=apk-artifacts /bridge.apk /opt/bridge.apk
+COPY --from=apk-artifacts /iris.apk /opt/iris.apk
+COPY --from=apk-artifacts /iris-source.tar.gz /opt/iris-source.tar.gz
+COPY --from=apk-artifacts /iris-dependencies.txt /opt/iris-dependencies.txt
 COPY iris/ /opt/iris-overlay/
 COPY docker/device.Dockerfile /opt/iris-build.Dockerfile
+# Declared last so a new revision does not bust the apt or pip layers.
+ARG VCS_REF=development
+ARG IMAGE_SOURCE=https://github.com/hellosunghyun/kakaotalk-bridge
+# Keep in sync with device/iris.py BUILD. CI passes the value read from that file.
+ARG COLLECTOR_BUILD=iris-ee1dc978-collector-v8
+LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.licenses="MIT AND GPL-3.0-only" \
+      org.kakaotalkbridge.collector-build="${COLLECTOR_BUILD}"
 ENTRYPOINT ["python", "-m", "device.cli"]
 CMD ["watch"]

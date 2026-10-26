@@ -25,7 +25,7 @@ try:
 except ImportError:  # Standalone bootstrap before the project is installed.
     BridgeError = RuntimeError
 
-REPOSITORY = "rokrokss/kakaotalk-bridge"
+REPOSITORY = "hellosunghyun/kakaotalk-bridge"
 VERSION = r"v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?"
 ASSET = "bridge-install.tar.gz"
 MAX_DOWNLOAD = 128 * 1024 * 1024
@@ -47,7 +47,7 @@ def validate_manifest(data):
     for kind in ("server", "device", "gateway"):
         ref = data.get("images", {}).get(kind, "")
         if not re.fullmatch(
-            re.escape(f"ghcr.io/{REPOSITORY}-{kind}") + r"@sha256:[a-f0-9]{64}", ref
+            re.escape(f"ghcr.io/{REPOSITORY}/{kind}") + r"@sha256:[a-f0-9]{64}", ref
         ):
             raise BridgeError("공식 릴리스 정보만 사용할 수 있습니다.")
         refs[kind] = ref
