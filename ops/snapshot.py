@@ -190,6 +190,9 @@ def reset_external_state(snapshot, project):
             "INSERT INTO metadata VALUES('cursor_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(uuid.uuid4()),),
         )
+        from server.outgoing import scrub_restored_queue
+
+        scrub_restored_queue(db)
         db.execute(
             "UPDATE outgoing SET status='unknown',reason='backup_restored',text=NULL "
             "WHERE status IN ('queued','dispatching')"

@@ -39,7 +39,7 @@ def is_loopback_redirect(uri):
         if not isinstance(uri, str) or any(ord(c) <= 32 or ord(c) == 127 for c in uri):
             return False
         u = urlsplit(uri)
-        u.port  # raises ValueError on a malformed port
+        _ = u.port  # raises ValueError on a malformed port
         return (
             u.scheme == "http"
             and u.hostname in LOOPBACK_HOSTS

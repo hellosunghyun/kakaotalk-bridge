@@ -375,6 +375,7 @@ def event_id(epoch, target_id, message_id):
 
 
 def build_payload(target, epoch, row, message, keywords):
+    from server.attachments import hint
     conversation = message.get("conversation") or {}
     sender = message.get("sender") or {}
     return {
@@ -394,6 +395,7 @@ def build_payload(target, epoch, row, message, keywords):
         "is_mine": bool(message.get("is_mine")),
         "body": message.get("body"),
         "message_type": message.get("message_type"),
+        **hint(message.get("message_type")),
         "truncated": bool(message.get("truncated")),
         "mentions": {"keywords": list(keywords), "matched": bool(keywords)},
     }

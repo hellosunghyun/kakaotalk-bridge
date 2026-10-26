@@ -8,6 +8,7 @@ import secrets
 from datetime import UTC, datetime
 
 from server import name_history
+from server.attachments import hint
 
 INDEX_SQL = """
 INSERT OR IGNORE INTO message_lookup
@@ -154,17 +155,20 @@ class Queries:
             "collected_at": r["received_at"],
             "body": r["body"],
             "message_type": r["message_type"],
+            **hint(r["message_type"]),
             "source": r["source"],
             "truncated": bool(r["truncated"]),
+            "log_id": str(r["log_id"]),
         }
 
-    SELECT = f"""SELECT m.*, c.body,c.received_at,c.truncated,
+    SELECT = f"""SELECT m.*, c.body,c.received_at,c.truncated,o.source_seq AS log_id,
       {name_history.NAME} sender_name,{name_history.STATUS} sender_status,
       CASE WHEN h.name IS NOT NULL THEN 'historical_name_current_unverified' ELSE s.reason END sender_reason,
       CASE WHEN h.name IS NOT NULL THEN h.name_source ELSE s.name_source END sender_source,
       s.updated_at sender_updated,h.observed_ms sender_observed_ms,h.message_id sender_evidence_id,
       r.name room_name,r.kind room_kind,r.status room_status,r.reason room_reason,r.name_source room_source,r.updated_at room_updated
       FROM message_lookup m JOIN candidates c ON c.id=m.message_id
+      JOIN observations o ON o.id=c.observation_id
       {name_history.JOINS}"""
 
     def messages(

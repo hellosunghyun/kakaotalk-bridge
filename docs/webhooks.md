@@ -61,10 +61,14 @@ sudo docker compose --profile dot up -d --no-deps --force-recreate dot-plugin
   "is_mine": false,
   "body": "@김성현 이거 봐줘",
   "message_type": "1",
+  "attachment_type": "text",
+  "has_attachment": false,
   "truncated": false,
   "mentions": {"keywords": ["@김성현"], "matched": true}
 }
 ```
+
+`attachment_type`과 `has_attachment`는 종류 코드 힌트입니다. 사진이면 `photo`와 `true`이며 URL은 넣지 않습니다. 본문을 보려면 기존처럼 페이로드의 `body`를, 이미지를 보려면 MCP `get_message_image`를 사용합니다.
 
 헤더: `webhook-id`(= `id`), `webhook-timestamp`, `webhook-signature: v1,<base64>`, `X-Kakao-Webhook-Target`. 서명은 [Standard Webhooks](https://www.standardwebhooks.com/) 방식으로 `id.timestamp.body`의 HMAC-SHA256입니다.
 

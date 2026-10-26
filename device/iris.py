@@ -9,16 +9,19 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from device import cli, enrollment
 
-BUILD = "iris-ee1dc978-collector-v6"
+BUILD = "iris-ee1dc978-collector-v8"
+_LISTENER = threading.Lock()
 ENTRY = "party.qwer.iris.CollectorMain"
 LOCAL_APK = "/opt/iris.apk"
 HOME = enrollment.HOME
@@ -30,6 +33,35 @@ KAKAO_PREFS = "/data/user/0/com.kakao.talk/shared_prefs/KakaoTalk.hw.perferences
 # The API accepts 1 MiB bodies; leave room for the JSON envelope.
 MAX_BATCH_BYTES = 768 * 1024
 SKIP_REASONS = {"decrypt_failed", "metadata_unreadable"}
+
+
+def _error_code(exc):
+    try:
+        payload = json.loads(exc.read(4096))
+    except (OSError, ValueError, AttributeError):
+        return None
+    reason = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(reason, str) and re.fullmatch(r"[a-z_]{3,64}", reason):
+        return reason
+    return None
+
+
+def attachment_request(log_id, token):
+    """Read one decrypted attachment. Raises RuntimeError with a stable code."""
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", str(log_id)):
+        raise RuntimeError("invalid_log_id")
+    url = "http://127.0.0.1:3000/collector/attachment?" + urlencode({"log_id": str(log_id)})
+    req = Request(url, headers={"Authorization": "Bearer " + token})
+    try:
+        with urlopen(req, timeout=20) as response:
+            body = response.read(96 * 1024 + 1)
+            if response.status != 200 or len(body) > 96 * 1024:
+                raise RuntimeError("attachment_unavailable")
+            return json.loads(body)
+    except HTTPError as exc:
+        raise RuntimeError(_error_code(exc) or "attachment_unavailable") from None
+    except (OSError, ValueError):
+        raise RuntimeError("attachment_unavailable") from None
 
 
 def request(url, payload=None, token=None):
@@ -140,6 +172,11 @@ def notification_reply_ready():
 
 def ensure_started(epoch):
     """Authenticate the running listener, or start this image's build. Returns the bearer."""
+    with _LISTENER:
+        return _ensure_started(epoch)
+
+
+def _ensure_started(epoch):
     token = ensure_auth(epoch)
     try:
         healthy(token)
@@ -244,6 +281,7 @@ class Collector:
         self.iris_token = None
         self.iris_epoch = None
         self.has_more = False
+        self.source_high_water = None
 
     def api_request(self, path, payload=None):
         return request(
@@ -307,6 +345,7 @@ class Collector:
             raise RuntimeError("iris_database_changed_requires_new_epoch")
         if int(page["high_water"]) < self.last_seq:
             raise RuntimeError("iris_database_regressed_requires_new_epoch")
+        self.source_high_water = int(page["high_water"])
         # Check again after querying. Never ingest a page after observing revocation.
         if page["rows"] and enrollment.require_approved().config != config:
             raise RuntimeError("enrollment_changed")
@@ -349,7 +388,7 @@ class Collector:
         )["item"]
         if item is None:
             return
-        status = "failed"
+        status, reason, match_after = "failed", None, None
         try:
             if (
                 enrollment.require_approved().config != config
@@ -358,32 +397,147 @@ class Collector:
                 or item["account_ref"] != account_identity(config)
             ):
                 raise RuntimeError("send_enrollment_mismatch")
-            status = "unknown"  # Any loss after beginning HTTP is ambiguous; do not retry.
-            result = request(
-                "http://127.0.0.1:3000/collector/send",
-                {
+            kind = item.get("kind") or "text"
+            if kind == "text":
+                # Set before the call so a lost HTTP response stays unknown, not a retry.
+                status = "unknown"
+                status, reason, match_after = self._send_text(config, item)
+            elif kind == "media":
+                status, reason, match_after = self._send_media(config, item)
+            elif kind in {"reply", "emoticon", "location"}:
+                status, reason, match_after = self._send_ui(item)
+            else:
+                reason = "device_rejected"
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired):
+            pass
+        body = {"status": status}
+        if status == "failed" and reason:
+            body["reason"] = reason
+        if status == "submitted" and match_after is not None:
+            body["match_after_seq"] = match_after
+        self.api("/internal/v1/outgoing/" + item["request_id"] + "/result", body)
+
+    def _send_text(self, config, item):
+        """Notification reply. Unchanged payload when there is no thread id."""
+        status, reason, match_after = "unknown", None, None
+        payload = {
+            "request_id": item["request_id"],
+            "chat_id": item["chat_id"],
+            "text": item["text"],
+            "database_id": self.database_id,
+            "enrollment_epoch": config["enrollment_epoch"],
+            "approved_user_id": config["approved_user_id"],
+        }
+        if item.get("thread_id"):
+            payload["thread_id"] = item["thread_id"]
+        result = request("http://127.0.0.1:3000/collector/send", payload, self.iris_token)
+        status, reason = self._interpret_send(result, item, config)
+        if status == "submitted":
+            match_after = _baseline(result, self.source_high_water)
+        return status, reason, match_after
+
+    def _send_media(self, config, item):
+        from device.media_stage import release_after_send, stage
+        from device.screen import ScreenBusy, ensure_awake, screen_lock
+
+        status, reason, match_after = "failed", None, None
+        names = []
+        submitted = False
+        try:
+            with screen_lock():
+                ensure_awake(cli.adb)
+                names = stage(cli.adb, self._fetch_blob, item)
+                status = "unknown"  # Any loss after beginning HTTP is ambiguous.
+                payload = {
                     "request_id": item["request_id"],
                     "chat_id": item["chat_id"],
-                    "text": item["text"],
                     "database_id": self.database_id,
                     "enrollment_epoch": config["enrollment_epoch"],
                     "approved_user_id": config["approved_user_id"],
-                },
-                self.iris_token,
-            )
-            if result.get("status") in {"failed", "unknown"}:
-                status = result["status"]
-            elif (
-                result.get("status") == "submitted"
-                and result.get("build") == BUILD
-                and result.get("request_id") == item["request_id"]
-                and result.get("enrollment_epoch") == config["enrollment_epoch"]
-                and result.get("database_id") == self.database_id
-            ):
-                status = "submitted"
-        except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired):
-            pass
-        self.api("/internal/v1/outgoing/" + item["request_id"] + "/result", {"status": status})
+                    "attachments": [
+                        {"name": name, "kind": attachment["kind"]}
+                        for name, attachment in zip(names, item.get("attachments") or [])
+                    ],
+                }
+                result = request("http://127.0.0.1:3000/collector/send", payload, self.iris_token)
+                status, reason = self._interpret_send(result, item, config)
+                submitted = status == "submitted"
+                if submitted:
+                    match_after = _baseline(result, self.source_high_water)
+        except ScreenBusy:
+            return "failed", "screen_busy", None
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            if status == "unknown":
+                return "unknown", None, None
+            code = str(exc)
+            if code in {
+                "screen_locked",
+                "screen_state_unreadable",
+                "media_stage_failed",
+                "screen_busy",
+            }:
+                return "failed", code, None
+            return "failed", "media_stage_failed", None
+        finally:
+            if names:
+                # KakaoTalk may read the file after the intent returns (video transcode/upload).
+                release_after_send(cli.adb, names, submitted or status == "unknown")
+        return status, reason, match_after
+
+    def _send_ui(self, item):
+        from device.screen import ScreenBusy
+        from device.ui_driver import UiDriver, ui_actions_enabled
+        from webui.device import Android
+
+        if not ui_actions_enabled():
+            return "failed", "ui_actions_disabled", None
+        try:
+            UiDriver(cli.adb, Android().text).perform(item)
+        except ScreenBusy:
+            return "failed", "screen_busy", None
+        except RuntimeError as exc:
+            code = str(exc)
+            if code in {
+                "ui_actions_disabled",
+                "ui_action_timeout",
+                "ui_action_failed",
+                "screen_locked",
+                "screen_state_unreadable",
+                "keyboard_unavailable",
+                "screen_busy",
+            }:
+                return "failed", code, None
+            return "failed", "ui_action_failed", None
+        return "submitted", None, _baseline({}, self.source_high_water)
+
+    def _interpret_send(self, result, item, config):
+        if result.get("status") == "failed":
+            reason = result.get("reason")
+            return "failed", reason if reason in _FAIL_REASONS else "device_rejected"
+        if result.get("status") == "unknown":
+            return "unknown", None
+        if (
+            result.get("status") == "submitted"
+            and result.get("build") == BUILD
+            and result.get("request_id") == item["request_id"]
+            and result.get("enrollment_epoch") == config["enrollment_epoch"]
+            and result.get("database_id") == self.database_id
+        ):
+            return "submitted", None
+        return "unknown", None
+
+    def _fetch_blob(self, request_id, ordinal):
+        url = (
+            os.getenv("API_URL", "http://api:8000")
+            + f"/internal/v1/outgoing/{request_id}/files/{ordinal}"
+        )
+        token = Path("/run/secrets/ingest_token").read_text().strip()
+        req = Request(url, headers={"Authorization": "Bearer " + token})
+        with urlopen(req, timeout=60) as response:
+            body = response.read(8 * 1024 * 1024 + 1)
+            if response.status != 200 or len(body) > 8 * 1024 * 1024:
+                raise RuntimeError("media_stage_failed")
+            return body
 
     def commit(self, events):
         """Send rows in order. The cursor only moves past rows the server stored."""
@@ -443,7 +597,43 @@ class Collector:
         )
 
 
+_FAIL_REASONS = {
+    "device_rejected",
+    "screen_locked",
+    "screen_state_unreadable",
+    "screen_busy",
+    "ui_actions_disabled",
+    "ui_action_timeout",
+    "ui_action_failed",
+    "media_stage_failed",
+    "kakao_activity_rejected",
+    "kakao_activity_unavailable",
+    "keyboard_unavailable",
+}
+
+
+def _baseline(result, polled):
+    raw = result.get("high_water")
+    if raw is None:
+        raw = polled
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 0 or value > 9223372036854775807:
+        return None
+    return value
+
+
 def watch():
+    try:
+        from device.media_service import serve
+
+        serve()
+    except Exception:  # noqa: BLE001 — reason text can embed a path; keep collecting
+        print(json.dumps({"iris_media": "unavailable"}), flush=True)
     collector = Collector()
     while True:
         try:
