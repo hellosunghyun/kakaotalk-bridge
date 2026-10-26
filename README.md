@@ -135,6 +135,30 @@ Mac VM에는 CPU 6개와 메모리 8 GiB가 설정됩니다. 측정된 최소 �
 공식 redroid 이미지의 Android 보안 패치가 오래되었으므로 전용 호스트 또는 VM을 사용하세요.
 [보안과 남은 위험](docs/security.md) · [수집 방식](docs/iris.md)
 
+<a id="prebuilt-arm-images"></a>
+## 미리 만든 ARM 이미지
+
+aarch64 서버에서 기기 이미지를 빌드하면 Android SDK를 에뮬레이션해 90분 이상 걸립니다. Actions가 `linux/arm64` 이미지를 GHCR에 올리면 서버는 받기만 합니다. 비워 두면 로컬 태그(`kakaotalk-bridge/{device,server,gateway}:local`)를 그대로 빌드합니다.
+
+`read:packages` 토큰으로 한 번 로그인합니다.
+
+```bash
+docker login ghcr.io
+```
+
+`.env`에 같은 태그를 적습니다. 태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`), 기기 이미지는 `iris-ee1dc978-collector-v8`입니다.
+
+```bash
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway:<tag>
+
+docker compose pull api gateway device-agent iris-collector admin
+docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin
+```
+
+**`redroid`는 넣지 마세요.** `docker compose down`과 `-v`도 쓰지 말고 `android-data` 볼륨을 건드리지 마세요. 수집기 APK는 `iris-collector`가 다시 시작될 때 `ensure_started`가 redroid 안의 `app_process`만 바꿉니다. 프로필 서비스와 서명 키는 [운영 안내](docs/operations.md#ghcr-images)에 있습니다.
+
 <a id="documentation"></a>
 ## 사용 안내
 
@@ -146,6 +170,7 @@ Mac VM에는 CPU 6개와 메모리 8 GiB가 설정됩니다. 측정된 최소 �
 | 이벤트를 보낼 대화 선택하기 | [MCP Events](docs/events.md) |
 | 접근 관리·업데이트·복구 | [패스키](docs/passkeys.md) · [운영](docs/operations.md) |
 | 배포 또는 내부 기능 개발 | [고급 설치](docs/onboarding.md) · [구조](docs/design.md) · [개발](docs/development.md) |
+| 서버에서 이미지 빌드를 건너뛰기 | [미리 만든 ARM 이미지](docs/operations.md#ghcr-images) |
 
 기존 설치는 설치 명령을 다시 실행해 업데이트합니다. [기존 설치 업데이트](docs/operations.md#update)
 [기여하기](CONTRIBUTING.md)

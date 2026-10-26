@@ -6,8 +6,14 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# SERVER_IMAGE selects a prebuilt server image (GHCR). COLLECTOR_IMAGE remains
+# the release-install pin. DOT_IMAGE still selects the dot services when
+# SERVER_IMAGE is unset. Unset all three to keep the local tags.
+x-server-image: &server-image "${SERVER_IMAGE:-${COLLECTOR_IMAGE:-kakaotalk-bridge/server:local}}"
+x-dot-image: &dot-image "${SERVER_IMAGE:-${DOT_IMAGE:-${COLLECTOR_IMAGE:-kakaotalk-bridge/server:local}}}"
+
 x-server: &server
-  image: ${COLLECTOR_IMAGE:-kakaotalk-bridge/server:local}
+  image: *server-image
   build:
     context: .
     dockerfile: docker/server.Dockerfile
@@ -228,7 +234,7 @@ services:
 
   dot-plugin:
     <<: *server
-    image: ${DOT_IMAGE:-kakaotalk-bridge/server:local}
+    image: *dot-image
     profiles: [dot]
     restart: unless-stopped
     command: [uvicorn, dot_plugin.app:create_app, --factory, --host, 0.0.0.0, --port, "8787", --no-access-log]
@@ -288,7 +294,7 @@ services:
 
   dot-control:
     <<: *server
-    image: ${DOT_IMAGE:-kakaotalk-bridge/server:local}
+    image: *dot-image
     profiles: [dot]
     restart: unless-stopped
     command: [uvicorn, dot_plugin.control:create_app, --factory, --host, 0.0.0.0, --port, "8788", --no-access-log]
@@ -305,7 +311,7 @@ services:
   # No published ports and no connection to the public ingress or Android.
   dot-tunnel:
     <<: *server
-    image: ${DOT_IMAGE:-kakaotalk-bridge/server:local}
+    image: *dot-image
     profiles: [tunnel]
     restart: unless-stopped
     command: [uvicorn, dot_plugin.tunnel:create_app, --factory, --host, 0.0.0.0, --port, "8789", --no-access-log]

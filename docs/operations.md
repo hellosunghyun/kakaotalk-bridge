@@ -87,6 +87,72 @@ git pull && kakaotalk-bridge update --source
 - 설치 명령은 같은 버전이면 업데이트 없이 관리 화면을 엽니다. 업데이트가 실패하면 관리 화면을 열지 않습니다.
 - Linux는 전체 과정을 root로 실행합니다.
 
+<a id="ghcr-images"></a>
+## 미리 만든 ARM 이미지
+
+aarch64 서버에서 `docker compose build iris-collector`는 Android SDK가 amd64 바이너리라 에뮬레이션으로 빌드하고 90분 이상 걸립니다. 같은 이미지는 GitHub Actions가 네이티브 ARM 러너에서 만들어 GHCR에 올립니다. 서버는 받기만 합니다. 수집기 APK는 x86_64 러너에서 만들어 arm64 이미지에 넣습니다.
+
+| 이미지 | 서비스 |
+| --- | --- |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/device` | `iris-collector`, `admin`, `device-agent` |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/server` | `api`, `dot-plugin`, `mcp` (`dot-control`, `dot-tunnel`도 같은 이미지) |
+| `ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway` | `gateway`, `admin-local`, `dot-ingress` |
+
+태그는 커밋 SHA 7자, 브랜치 이름(`/`는 `-`)입니다. 기기 이미지는 수집기 빌드 `iris-ee1dc978-collector-v8` 태그도 달립니다. `main`에 푸시하거나 `feat/*` 브랜치, 태그, Actions의 수동 실행에서 올라갑니다. PR은 빌드만 하고 푸시하지 않습니다. 이미지 잡은 `ubuntu-24.04-arm`을 씁니다. 그 라벨의 러너가 없으면 잡이 시작되지 않으므로 GitHub 호스티드 ARM 러너를 사용할 수 있어야 합니다.
+
+### 서버에서 한 번
+
+`read:packages`가 있는 GitHub 토큰으로 로그인합니다. 비밀번호 자리에 토큰을 넣고, 토큰을 셸 기록에 남기지 마세요.
+
+```bash
+docker login ghcr.io
+```
+
+### 이미지 바꾸기
+
+설치 폴더 `.env`에 세 이미지를 같은 태그로 적습니다. 비워 두면 지금까지와 같이 `kakaotalk-bridge/server:local`, `kakaotalk-bridge/device:local`, `kakaotalk-bridge/gateway:local`을 빌드합니다.
+
+```bash
+DEVICE_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/device:<tag>
+SERVER_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/server:<tag>
+GATEWAY_IMAGE=ghcr.io/hellosunghyun/kakaotalk-bridge-private/gateway:<tag>
+```
+
+`SERVER_IMAGE`가 있으면 `api`, `dot-plugin`, `mcp`와 dot 계열 서비스가 그 이미지를 씁니다. 예전에 `DOT_IMAGE`나 `COLLECTOR_IMAGE`가 있어도 `SERVER_IMAGE`가 우선합니다. `SERVER_IMAGE`가 없으면 릴리스 설치가 쓰던 `COLLECTOR_IMAGE`와 `DOT_IMAGE`가 그대로 동작합니다.
+
+```bash
+docker compose pull api gateway device-agent iris-collector admin
+docker compose up -d --no-deps --no-build api gateway device-agent iris-collector admin
+```
+
+`--no-build`는 이미지가 없을 때 서버에서 Gradle 빌드로 넘어가지 않게 합니다. `--no-deps`는 의존 서비스를 다시 만들지 않습니다.
+
+이미 `dot`, `mcp`, `tunnel`, `local-admin` 프로필을 쓰는 경우에만 해당 서비스도 같은 방식으로 바꿉니다.
+
+```bash
+docker compose --profile dot pull dot-plugin dot-control dot-ingress
+docker compose --profile dot up -d --no-deps --no-build dot-plugin dot-control dot-ingress
+docker compose --profile mcp pull mcp
+docker compose --profile mcp up -d --no-deps --no-build mcp
+docker compose --profile tunnel pull dot-tunnel
+docker compose --profile tunnel up -d --no-deps --no-build dot-tunnel
+docker compose --profile local-admin pull admin-local
+docker compose --profile local-admin up -d --no-deps --no-build admin-local
+```
+
+**`redroid`는 이 명령에 넣지 마세요.** `docker compose down`, `-v`, `adb-init`, `bootstrap`도 쓰지 마세요. `android-data` 볼륨을 지우거나 다시 만들지 마세요. 카카오톡 로그인이 사라집니다. `adb-init`은 그 볼륨을 마운트하므로 다시 만들지 않습니다.
+
+수집기 APK는 `iris-collector`가 다시 시작될 때 기존 `ensure_started`가 이미지 안 APK와 비교해 다르면 올리고, redroid 안의 `app_process`만 다시 시작합니다. redroid 컨테이너와 로그인은 유지됩니다.
+
+Actions에서 푸시하려면 저장소의 Workflow permissions가 읽기·쓰기이고, 워크플로가 `GITHUB_TOKEN`에 `packages: write`를 요청합니다. GHCR용 별도 시크릿은 없습니다. 기기 이미지를 푸시하려면 서버에 이미 있는 키보드 서명 키를 저장소 시크릿으로 넣습니다. 키가 다르면 설치된 키보드 앱을 업데이트할 수 없습니다.
+
+| 시크릿 | 값 |
+| --- | --- |
+| `BRIDGE_RELEASE_KEYSTORE_BASE64` | 서버 `secrets/bridge.jks`의 base64 |
+| `BRIDGE_RELEASE_KEY_PASSWORD` | 서버 `secrets/bridge_key_password` 내용 |
+
+PR에 이 시크릿이 없으면 APK 빌드는 일회용 키로 검증만 하고 이미지를 푸시하지 않습니다.
+
 <a id="stop-and-restart"></a>
 ## 중지와 재시작
 

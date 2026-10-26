@@ -8,10 +8,6 @@ RUN python -m pip install --no-cache-dir --require-hashes -r build-requirements.
     && python -m pip --python /opt/venv install --no-cache-dir --require-hashes -r requirements.lock
 
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
-ARG VCS_REF=development
-LABEL org.opencontainers.image.source="https://github.com/rokrokss/kakaotalk-bridge" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.licenses="MIT"
 ENV PATH="/opt/venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
     && /usr/local/bin/python -m pip uninstall -y pip \
@@ -25,5 +21,11 @@ COPY ops/ ops/
 COPY assets/logo.svg assets/
 COPY LICENSE .
 USER collector
+# Declared last so a new revision does not bust the apt or pip layers.
+ARG VCS_REF=development
+ARG IMAGE_SOURCE=https://github.com/rokrokss/kakaotalk-bridge
+LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.licenses="MIT"
 EXPOSE 8000
 CMD ["uvicorn", "server.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
