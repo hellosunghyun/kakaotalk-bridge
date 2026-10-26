@@ -137,6 +137,8 @@ ingress smoke 테스트는 일회용 Docker 네트워크·echo 서버를 사용�
 
 Docker 기반 이미지는 다이제스트로 고정합니다. 기기 빌드는 키보드 앱의 `assembleRelease`, `lintRelease`, `apksigner verify`와 Iris Kotlin 테스트·`assembleRelease`를 실행합니다. 오버레이 Gradle 설정으로 Netty 버전을 맞추고 실제 결과를 `/opt/iris-dependencies.txt`에 보관합니다.
 
+ARM 서버에서 기기 이미지를 직접 빌드하면 amd64 Android SDK를 에뮬레이션합니다. `.github/workflows/images.yml`은 그 APK를 x86_64 러너에서 만들고, `linux/arm64` 런타임 이미지는 `ubuntu-24.04-arm`에서 만듭니다. 받는 절차는 [미리 만든 ARM 이미지](operations.md#ghcr-images)입니다. 체크아웃에서 `docker compose build`로 로컬 태그를 만드는 경로는 그대로입니다.
+
 ARM 소스 빌드는 컴파일 전에 고정한 amd64 Android 빌드 이미지에서 실행 검사를 합니다. 에뮬레이터가 실패하면 다이제스트로 고정한 `tonistiigi/binfmt` 이미지로 `qemu-x86_64` 처리기만 교체하고 재검사합니다. 특권 Docker 접근이 필요하며 릴리스 이미지 설치·네이티브 실행 컨테이너에는 이 빌드 단계가 필요하지 않습니다. 고정 에뮬레이터는 [Lima 다중 아키텍처 안내](https://lima-vm.io/docs/config/multi-arch/)를 기준으로 합니다.
 
 <a id="contribution-guidelines"></a>

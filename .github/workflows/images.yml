@@ -1,0 +1,254 @@
+# Build linux/arm64 images for the aarch64 server and push them to GHCR.
+# The device image's Android SDK/Gradle stages are linux/amd64 binaries, so those
+# APKs are built on an x86_64 runner and injected into a native arm64 image build.
+name: ARM 이미지
+
+on:
+  push:
+    branches: [main, "feat/**"]
+    tags: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      images:
+        description: Images to build and push
+        required: true
+        default: all
+        type: choice
+        options: [all, device, server, gateway]
+
+concurrency:
+  group: arm-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect image inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      device: ${{ steps.filter.outputs.device }}
+      server: ${{ steps.filter.outputs.server }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      push: ${{ steps.filter.outputs.push }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          WORKFLOW_IMAGES: ${{ github.event.inputs.images || 'all' }}
+        run: bash .github/scripts/image-changes.sh
+
+  apks:
+    name: Build collector and keyboard APKs
+    needs: changes
+    if: needs.changes.outputs.device == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Restore APK cache
+        id: apk-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/apk-artifacts
+          key: device-apks-${{ hashFiles('android/**', 'iris/**', 'docker/device.Dockerfile') }}
+      - name: Prepare signing key
+        id: signing
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        env:
+          KEYSTORE: ${{ secrets.BRIDGE_RELEASE_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.BRIDGE_RELEASE_KEY_PASSWORD }}
+          GRADLE_IMAGE: gradle:8.11.1-jdk17@sha256:91d559b8d55f522de5bc6882f73bcedc4e2cc7b0a58e839a9fa0ed95811a988d
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p /tmp/bridge-signing
+          if [[ -n "${KEYSTORE:-}" || -n "${PASSWORD:-}" ]]; then
+            if [[ -z "${KEYSTORE:-}" || -z "${PASSWORD:-}" ]]; then
+              echo "Set both BRIDGE_RELEASE_KEYSTORE_BASE64 and BRIDGE_RELEASE_KEY_PASSWORD." >&2
+              exit 1
+            fi
+            printf '%s' "$KEYSTORE" | base64 -d > /tmp/bridge-signing/bridge.jks
+            printf '%s' "$PASSWORD" > /tmp/bridge-signing/password
+            echo "real=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "Pushes need BRIDGE_RELEASE_KEYSTORE_BASE64 and BRIDGE_RELEASE_KEY_PASSWORD (the server keyboard keystore)." >&2
+            exit 1
+          else
+            printf '%s' ephemeral > /tmp/bridge-signing/password
+            docker run --rm --user 0 --entrypoint /bin/sh \
+              -v /tmp/bridge-signing:/signing \
+              "$GRADLE_IMAGE" \
+              -c 'keytool -genkeypair -alias bridge -keyalg RSA -keysize 3072 -validity 3650 -dname "CN=KakaoTalk Bridge CI" -keystore /signing/bridge.jks -storepass:file /signing/password -keypass:file /signing/password'
+            echo "real=false" >> "$GITHUB_OUTPUT"
+            echo "Pull request has no signing secrets; using an ephemeral keystore. This image is not pushed."
+          fi
+          test -s /tmp/bridge-signing/bridge.jks
+          test -s /tmp/bridge-signing/password
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+      - name: Build APKs on x86_64
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/device.Dockerfile
+          target: apk-artifacts
+          platforms: linux/amd64
+          push: false
+          provenance: "false"
+          sbom: "false"
+          outputs: type=local,dest=${{ runner.temp }}/apk-artifacts
+          secret-files: |
+            bridge_keystore=/tmp/bridge-signing/bridge.jks
+            bridge_key_password=/tmp/bridge-signing/password
+          cache-from: type=gha,scope=device-apk
+          cache-to: type=gha,scope=device-apk,mode=max,ignore-error=true
+      - name: Check APK bundle
+        run: bash .github/scripts/flatten-apks.sh "${RUNNER_TEMP}/apk-artifacts"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: device-apks
+          path: ${{ runner.temp }}/apk-artifacts
+          if-no-files-found: error
+          retention-days: 1
+      - name: Save APK cache
+        if: steps.apk-cache.outputs.cache-hit != 'true' && steps.signing.outputs.real == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/apk-artifacts
+          key: ${{ steps.apk-cache.outputs.cache-primary-key }}
+      - name: Remove signing material
+        if: always()
+        run: rm -rf /tmp/bridge-signing
+
+  device:
+    name: Publish device image
+    needs: [changes, apks]
+    if: needs.changes.outputs.device == 'true' && needs.apks.result == 'success'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: device-apks
+          path: ${{ runner.temp }}/apk-artifacts
+      - name: Check APK bundle
+        run: bash .github/scripts/flatten-apks.sh "${RUNNER_TEMP}/apk-artifacts"
+      - id: meta
+        run: |
+          set -euo pipefail
+          build_id=$(sed -n 's/^BUILD = "\([^"]*\)"$/\1/p' device/iris.py)
+          test -n "$build_id"
+          bash .github/scripts/image-tags.sh device "$build_id"
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: needs.changes.outputs.push == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/device.Dockerfile
+          platforms: linux/arm64
+          push: ${{ needs.changes.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-contexts: apk-artifacts=${{ runner.temp }}/apk-artifacts
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            COLLECTOR_BUILD=${{ steps.meta.outputs.build_id }}
+          provenance: "false"
+          sbom: "false"
+          cache-from: type=gha,scope=device-arm64
+          cache-to: type=gha,scope=device-arm64,mode=max,ignore-error=true
+
+  server:
+    name: Publish server image
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: meta
+        run: bash .github/scripts/image-tags.sh server
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: needs.changes.outputs.push == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/server.Dockerfile
+          platforms: linux/arm64
+          push: ${{ needs.changes.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+          provenance: "false"
+          sbom: "false"
+          cache-from: type=gha,scope=server-arm64
+          cache-to: type=gha,scope=server-arm64,mode=max,ignore-error=true
+
+  gateway:
+    name: Publish gateway image
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: meta
+        run: bash .github/scripts/image-tags.sh gateway
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: needs.changes.outputs.push == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/gateway.Dockerfile
+          platforms: linux/arm64
+          push: ${{ needs.changes.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+          provenance: "false"
+          sbom: "false"
+          cache-from: type=gha,scope=gateway-arm64
+          cache-to: type=gha,scope=gateway-arm64,mode=max,ignore-error=true

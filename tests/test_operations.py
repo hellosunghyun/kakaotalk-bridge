@@ -436,6 +436,20 @@ def test_doctor_reports_certificate_expiry(tmp_path, monkeypatch, days, ok, text
     )
 
 
+def test_snapshot_command_prefers_server_image_then_existing_pins(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ROOT", tmp_path)
+    (tmp_path / ".env").write_text(
+        "SERVER_IMAGE=ghcr.io/example/server:sha\nDOT_IMAGE=dot\nCOLLECTOR_IMAGE=old\n"
+    )
+    assert "ghcr.io/example/server:sha" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("DOT_IMAGE=dot\nCOLLECTOR_IMAGE=old\n")
+    assert "dot" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("COLLECTOR_IMAGE=old\n")
+    assert "old" in backup.snapshot_command("create", {})
+    (tmp_path / ".env").write_text("")
+    assert "kakaotalk-bridge/server:local" in backup.snapshot_command("create", {})
+
+
 @pytest.mark.parametrize("healthy", [True, False])
 def test_update_backs_up_under_the_old_images_and_rolls_back_when_unhealthy(
     tmp_path, monkeypatch, healthy
