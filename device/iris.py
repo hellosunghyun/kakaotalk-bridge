@@ -480,7 +480,8 @@ class Collector:
             return "failed", "media_stage_failed", None
         finally:
             if names:
-                release_after_send(cli.adb, names, submitted)
+                # KakaoTalk may read the file after the intent returns (video transcode/upload).
+                release_after_send(cli.adb, names, submitted or status == "unknown")
         return status, reason, match_after
 
     def _send_ui(self, item):

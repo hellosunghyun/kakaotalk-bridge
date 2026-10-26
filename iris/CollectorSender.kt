@@ -16,6 +16,7 @@ import java.io.File
 
 object CollectorSender {
     private const val SERVICE = "com.kakao.talk.notification.NotificationActionService"
+    private const val SHARE = "com.kakao.talk.activity.RecentExcludeIntentFilterActivity"
     const val STAGE = "/sdcard/Android/data/com.kakao.talk/files"
     private const val MAX_BYTES = 8L * 1024 * 1024
     private val KINDS = setOf("image", "video", "audio", "file")
@@ -83,7 +84,9 @@ object CollectorSender {
         }
         val action = if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE
         return Intent(action).apply {
-            setPackage("com.kakao.talk")
+            // Explicit: on 26.9.1 `*/*` and `text/plain` match two KakaoTalk activities,
+            // which opens the system chooser instead of sending.
+            component = ComponentName("com.kakao.talk", SHARE)
             type = mime
             if (uris.size == 1) putExtra(Intent.EXTRA_STREAM, uris[0])
             else putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)

@@ -57,7 +57,7 @@
 
 `POST /v1/outgoing`의 `attachments[]` 또는 `send_media`로 보냅니다. 한 요청은 텍스트·`thread_id`·인용·이모티콘·위치와 섞지 않습니다. 항목은 최대 10개, 하나 8MiB, 합계 20MiB입니다. 허용 MIME은 jpeg, png, gif, webp, heic, heif, mp4, 3gpp, webm, quicktime, mpeg, mp4 음성, aac, amr, ogg, wav, pdf, zip, 텍스트, `application/octet-stream`입니다. 파일 이름의 확장자는 그 종류와 같아야 하고, 경로 구분자는 잘라 낸 뒤 `kb-{순번}-{이름}`으로만 다룹니다. 같은 요청에 사진과 파일을 같이 넣지 않습니다.
 
-작업자는 바이트를 `/sdcard/Android/data/com.kakao.talk/files`에 잠깐 두고 `ACTION_SEND`(한 개) 또는 `ACTION_SEND_MULTIPLE`로 `com.kakao.talk`에 넘깁니다. extra는 `key_id`(방 ID), `key_type=1`, `key_from_direct_share=true`입니다. 이 구성은 Iris 커밋 `194c7eb`(2026-10-24)의 미디어 전송을 옮긴 것입니다. 수집기 `/collector/send`에는 파일 이름만 가고 바이트는 가지 않습니다. 넘긴 뒤 약 2초 후 `kb-` 파일만 지웁니다. 카카오톡 DB에는 쓰지 않습니다.
+작업자는 바이트를 `/sdcard/Android/data/com.kakao.talk/files`에 잠깐 두고 `ACTION_SEND`(한 개) 또는 `ACTION_SEND_MULTIPLE`로 `com.kakao.talk`에 넘깁니다. extra는 `key_id`(방 ID), `key_type=1`, `key_from_direct_share=true`입니다. 이 구성은 Iris 커밋 `194c7eb`(2026-10-24)의 미디어 전송을 옮긴 것입니다. 수집기 `/collector/send`에는 파일 이름만 가고 바이트는 가지 않습니다. 대상은 `com.kakao.talk/.activity.RecentExcludeIntentFilterActivity`로 명시합니다(26.9.1에서 `*/*`·`text/plain`은 카카오톡 액티비티 두 개와 맞아 시스템 선택 창이 뜸). 카카오톡은 동영상 등을 `chat_sending_logs`에 넣고 `file://` 경로를 나중에 읽으므로, `submitted`나 `unknown`이면 파일을 남겨 두고 다음 미디어 전송 때 30분(`PENDING_TTL`)이 지난 `kb-` 파일만 지웁니다. `failed`면 바로 지웁니다. 같은 이름 파일을 30분 안에 다시 보내면 앞의 파일을 덮어씁니다. 카카오톡 DB에는 쓰지 않습니다.
 
 카카오톡 26.9.0 이상은 화면이 꺼져 있으면 공유된 미디어를 버릴 수 있습니다. 미디어를 보내기 전에 화면을 켭니다. 잠금 화면이면 잠금을 풀지 않고 `screen_locked`로 실패합니다. 화면 상태를 읽지 못하면 `screen_state_unreadable`입니다. 미디어와 UI 전송은 호스트의 화면 잠금 파일 하나를 같이 씁니다. 텍스트 알림 답장은 그 잠금을 잡지 않습니다.
 

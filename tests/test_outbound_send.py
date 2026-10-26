@@ -285,7 +285,7 @@ def _adb_script(window="mDreamingLockscreen=false", power="Display Power: state=
     return calls, adb
 
 
-def test_media_worker_sends_names_and_deletes_staged_files(sending, monkeypatch, tmp_path):
+def test_media_worker_sends_names_and_keeps_submitted_files(sending, monkeypatch, tmp_path):
     monkeypatch.setenv("KAKAO_SCREEN_LOCK", str(tmp_path / "screen.lock"))
     collector, client, _, body = sending
     raw, payload = media_body((collector, client, None, body))
@@ -294,7 +294,6 @@ def test_media_worker_sends_names_and_deletes_staged_files(sending, monkeypatch,
     sent = []
     monkeypatch.setattr(iris.cli, "adb", adb)
     monkeypatch.setattr(collector, "_fetch_blob", lambda request_id, ordinal: raw)
-    monkeypatch.setattr("device.media_stage.time.sleep", lambda seconds: sent.append(("sleep", seconds)))
 
     def request(url, payload=None, token=None):
         sent.append(payload)
@@ -305,8 +304,8 @@ def test_media_worker_sends_names_and_deletes_staged_files(sending, monkeypatch,
     monkeypatch.setattr(iris, "request", request)
     collector.send_pending(CONFIG)
     assert sent[0]["attachments"][0]["name"].startswith("kb-")
-    assert ("sleep", 2) in sent
-    assert any(call[:3] == ("shell", "rm", "-f") and call[-1].endswith("kb-0-shot.jpg") for call in calls)
+    # KakaoTalk may still read a submitted share; the file stays for the next aged sweep.
+    assert not any(call[:3] == ("shell", "rm", "-f") and call[-1].endswith("kb-0-shot.jpg") for call in calls)
     assert status(client, payload)["status"] == "submitted"
     assert status(client, payload)["delivery_confirmed"] is False
 
@@ -652,3 +651,32 @@ def test_activity_lookup_failure_is_a_known_fail_reason():
 
     assert "kakao_activity_unavailable" in FAIL_REASONS
     assert "kakao_activity_unavailable" in iris._FAIL_REASONS
+
+
+def test_aged_sweep_keeps_files_kakaotalk_may_still_read():
+    removed = []
+    mtimes = {f"{STAGE}/kb-0-old.mp4": "1000", f"{STAGE}/kb-0-new.mp4": "9000"}
+
+    def adb(*args, check=True, timeout=25):
+        if args[1] == "ls":
+            return "kb-0-old.mp4\nkb-0-new.mp4\nKakaoTalk.jpg\n"
+        if args[1] == "date":
+            return "9100"
+        if args[1] == "stat":
+            return mtimes[args[-1]]
+        removed.append(args)
+        return ""
+
+    sweep(adb, keep_seconds=1800)
+    assert removed == [("shell", "rm", "-f", f"{STAGE}/kb-0-old.mp4")]
+
+
+def test_failed_media_send_deletes_staged_files_now():
+    from device.media_stage import release_after_send
+
+    calls = []
+    release_after_send(lambda *args, **kw: calls.append(args), ["kb-0-a.mp4"], False)
+    assert calls == [("shell", "rm", "-f", f"{STAGE}/kb-0-a.mp4")]
+    calls.clear()
+    release_after_send(lambda *args, **kw: calls.append(args), ["kb-0-a.mp4"], True)
+    assert calls == []
