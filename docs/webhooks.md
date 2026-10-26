@@ -97,3 +97,28 @@ def verify(secret, headers, body: bytes, tolerance=300):
 - 본문은 신뢰할 수 없는 데이터입니다. 수신 서버에서 본문 내용을 지시로 실행하지 마세요.
 
 테스트: `tests/test_webhooks.py`.
+
+## 즉시 응답(instant_acks)
+
+설정 파일이 JSON 객체이면 `targets`와 함께 `instant_acks`를 둘 수 있습니다. 지정한 방에서 키워드가 들어간 메시지가 수집되면, MCP `send_message`와 같은 전송 경로(`/v1/outgoing`)로 고정 문구를 바로 보냅니다. 느린 답변 전에 "확인 중" 표시를 남기는 용도입니다.
+
+```json
+{
+  "targets": [ ... ],
+  "instant_acks": [{
+    "id": "ai-tag",
+    "text": "💭 Grok Bot",
+    "conversation_refs": ["device:epoch:123"],
+    "mentions": ["@홍길동"],
+    "include_mine": true,
+    "skip_prefixes": ["Grok Bot 입니다."],
+    "enabled": true
+  }]
+}
+```
+
+- 메시지마다 한 번만 보냅니다. `(id, message_id)` 기록과 결정적 `request_id`(UUIDv5)로 재시작 후에도 중복 전송하지 않습니다.
+- `text`나 `skip_prefixes`로 시작하는 메시지에는 응답하지 않습니다(자기 응답 루프 방지).
+- 처음 켜면 현재 커서부터 시작하고, 10분보다 오래된 메시지에는 응답하지 않습니다. 전송 결과를 알 수 없으면 같은 `request_id`로 감지 후 2분까지만 재시도합니다.
+- 끄기: 항목에 `"enabled": false` 또는 환경변수 `KAKAO_INSTANT_ACKS=off`. 설정은 시작할 때만 읽습니다.
+- 로그에는 규칙 `id`, `message_id`, 전송 상태만 남기고 본문은 남기지 않습니다.
